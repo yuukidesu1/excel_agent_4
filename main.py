@@ -20,32 +20,32 @@ from excel_agent import run_extraction
 
 
 # ── 示例 1：全列模式（保留子表所有列）──────────────────────────
+result = run_extraction(
+    excel_path     = "./ws_test_file_use.xlsx",
+    sheet_name     = "WL_asaibaijian",
+    subtable_title = "4G Configuration",
+    # target_columns 不传 = 保留全部列
+)
+
+# ── 示例 2：列过滤模式（只保留指定列）──────────────────────────
 # result = run_extraction(
 #     excel_path     = "./ws_test_file_use.xlsx",
 #     sheet_name     = "CONFIGURATION",
-#     subtable_title = "4G Configuration",
-#     # target_columns 不传 = 保留全部列
+#     subtable_title = "3G Configuration",
+#     target_columns = [
+#         {"parent": None,        "child": "SYSTEM MODULE"},
+#         {"parent": None,        "child": "CELL"},
+#         {"parent": "RF MODULE", "child": "TYPE"},
+#         {"parent": "RF MODULE", "child": "QTY."},
+#         {"parent": "ANTENNAS",  "child": "NEW/SWAP/EXIST"},
+#         {"parent": "ANTENNAS",  "child": "Antenna Type"},
+#         {"parent": "ANTENNAS",  "child": "Antenna Qty."},
+#         {"parent": "RRU Cable", "child": "POWER LENGTH(m)"},
+#         {"parent": "RRU Cable", "child": "OPT LENGTH(m)"},
+#         {"parent": "TILT",      "child": "M"},
+#         {"parent": "TILT",      "child": "E"},
+#     ],
 # )
-
-# ── 示例 2：列过滤模式（只保留指定列）──────────────────────────
-result = run_extraction(
-    excel_path     = "./ws_test_file_use.xlsx",
-    sheet_name     = "CONFIGURATION",
-    subtable_title = "3G Configuration",
-    target_columns = [
-        {"parent": None,        "child": "SYSTEM MODULE"},
-        {"parent": None,        "child": "CELL"},
-        {"parent": "RF MODULE", "child": "TYPE"},
-        {"parent": "RF MODULE", "child": "QTY."},
-        {"parent": "ANTENNAS",  "child": "NEW/SWAP/EXIST"},
-        {"parent": "ANTENNAS",  "child": "Antenna Type"},
-        {"parent": "ANTENNAS",  "child": "Antenna Qty."},
-        {"parent": "RRU Cable", "child": "POWER LENGTH(m)"},
-        {"parent": "RRU Cable", "child": "OPT LENGTH(m)"},
-        {"parent": "TILT",      "child": "M"},
-        {"parent": "TILT",      "child": "E"},
-    ],
-)
 
 print(f"\n{'成功 ✓' if result['success'] else '失败 ✗'}  "
       f"质量分：{result['quality_score']:.2f}  重试：{result['retry_count']} 次")

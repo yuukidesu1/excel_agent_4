@@ -148,11 +148,14 @@ def _parse_json(raw: str) -> dict:
 
 
 def locate_node(state: AgentState) -> dict:
-    st     = state["sheet_structure"]
+    # st     = state["sheet_structure"]
+    st     = state.get("sheet_structure")
+    if not st:
+        raise ValueError("严重错误：未能获取到 sheet_structure！请检查 parse 节点是否正常执行，或目标 Sheet 页是否存在。")
     errors = state.get("errors", [])
 
     # ------------------DEBUG
-    print(f"\n[Locate Node] 接收到的 sheet_structure 的键有: {list(st.keys())}\n")
+    # print(f"\n[Locate Node] 接收到的 sheet_structure 的键有: {list(st.keys())}\n")
 
     ctx = {
         "subtable_title":    state["config"]["subtable_title"],

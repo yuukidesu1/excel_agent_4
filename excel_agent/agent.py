@@ -21,9 +21,9 @@ from excel_agent.nodes.restore    import restore_node
 from excel_agent.nodes.quality    import quality_node, route, QUALITY_THRESHOLD
 
 # 开启 LangSmith 追踪
-# os.environ["LANGCHAIN_TRACING_V2"] = "true"
-# os.environ["LANGCHAIN_PROJECT"] = "LangGraph_Debug_Test"
-# os.environ["LANGCHAIN_API_KEY"] = "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" # 去 smith.langchain.com 免费申请一个
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "LangGraph_Debug_Test"
+os.environ["LANGCHAIN_API_KEY"] = "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" # 去 smith.langchain.com 免费申请一个
 
 
 def _retry_node(state: AgentState) -> dict:
@@ -104,16 +104,16 @@ def run_extraction(
     agent = build_agent()
 
     """对编译好的图进行可视化"""
-    import matplotlib.pyplot as plt
-    import matplotlib.image as mpimg
-    import io
-    png_data = agent.get_graph().draw_mermaid_png()
-    img = mpimg.imread(io.BytesIO(png_data))
-
-    plt.figure(figsize=(12, 8), dpi=300)
-    plt.imshow(img, interpolation="lanczos")
-    plt.axis('off')
-    plt.show()
+    # import matplotlib.pyplot as plt
+    # import matplotlib.image as mpimg
+    # import io
+    # png_data = agent.get_graph().draw_mermaid_png()
+    # img = mpimg.imread(io.BytesIO(png_data))
+    #
+    # plt.figure(figsize=(12, 8), dpi=300)
+    # plt.imshow(img, interpolation="lanczos")
+    # plt.axis('off')
+    # plt.show()
 
     final = agent.invoke(_make_initial(excel_path, sheet_name, subtable_title,
                                        hints, target_columns))

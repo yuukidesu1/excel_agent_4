@@ -35,8 +35,14 @@ def _row_is_empty(ws, row_idx: int, max_col: int) -> bool:
 
 
 def parse_node(state: AgentState) -> dict:
-    wb         = openpyxl.load_workbook(state["config"]["excel_path"])
+    # try:
+    #     wb         = openpyxl.load_workbook(state["config"]["excel_path"])
+    # except Exception as e:
+    #     return {"error" : f"无法读取 Excel 文件: {state['config']['excel_path']}"}
+    wb = openpyxl.load_workbook(state["config"]["excel_path"])
     sheet_name = _find_sheet(wb, state["config"]["sheet_name"])
+    if sheet_name not in wb.sheetnames:
+        return {"error": f"未找到目标 Sheet 页: {state['config']['sheet_name']}"}
     ws         = wb[sheet_name]
     max_row    = ws.max_row
     max_col    = ws.max_column
