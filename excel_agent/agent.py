@@ -33,6 +33,8 @@ from excel_agent.nodes.extract import extract_node
 from excel_agent.nodes.restore import restore_node
 from excel_agent.nodes.quality import quality_node, route
 
+from typing import AsyncGenerator
+
 
 def _retry_node(state: AgentState) -> dict:
     """重试节点：仅递增计数，errors 已在 quality_node 中追加"""
@@ -128,5 +130,90 @@ def run_extraction(excel_path: str, sheet_name: str, subtable_title: str,
         "errors":        final["errors"],
     }
 
+def run_extraction_stream(excel_path: str, sheet_name: str, subtable_title: str, hints: str = None) -> dict:
+    agent = build_agent()
+
+    initial: AgentState = {
+        "excel_path": excel_path,
+        "config": {
+            "sheet_name": sheet_name,
+            "subtable_title": subtable_title,
+            "hints": hints,
+        },
+        "sheet_structure": None,
+        "header_map": None,
+        "raw_data": None,
+        "result": None,
+        "quality_score": 0.0,
+        "retry_count": 0,
+        "errors": [],
+        "final_output": None,
+    }
+
+    for step_output in agent.stream(initial, stream_mode="updates"):
+        for node_name, state_update in step_output.items():
+            yield {
+                "status": "running",
+                "mode": node_name,
+                "message": f"节点 [{node_name}] 执行完毕",
+                "data": state_update,
+            }
+
+    yield {
+        "status": "completed",
+        "node": "END",
+        "message": "抽取流程已结束",
+        "data": {}
+    }
+
+
+
+async def run_extraction_deep_stream(excel_path: str, sheet_name: str, subtable_title: str,
+                                     hints: str = None) -> AsyncGenerator[dict, None]:
+    """
+    底层事件级流式入口 (Async Generator)。
+    捕获 Token 吐字、工具调用和节点进度。
+    """
+    agent = build_agent()
+
+    initial: AgentState = {
+        "excel_path": excel_path,
+        "config": {
+            "sheet_name": sheet_name,
+            "subtable_title": subtable_title,
+            "hints": hints,
+        },
+        "sheet_structure": None,
+        "header_map": None,
+        "raw_data": None,
+        "result": None,
+        "quality_score": 0.0,
+        "retry_count": 0,
+        "errors": [],
+        "final_output": None,
+    }
+
+    # version="v2" 是推荐的事件流版本
+    async for event in agent.astream_events(initial, version="v2"):
+        kind = event["event"]
+        name = event["name"]
+
+        # 1. 捕获大模型思考过程 (Token)
+        if kind == "on_chat_model_stream":
+            content = event["data"]["chunk"].content
+            if content:
+                yield {"type": "token", "content": content}
+
+        # 2. 捕获工具调用开始
+        elif kind == "on_tool_start":
+            yield {"type": "tool_start", "name": name, "input": event["data"].get("input")}
+
+        # 3. 捕获工具调用结束
+        elif kind == "on_tool_end":
+            yield {"type": "tool_end", "name": name, "output": event["data"].get("output")}
+
+        # 4. 捕获节点执行完成（用于更新状态）
+        elif kind == "on_chain_end" and name in ["parse", "locate", "extract", "restore", "quality"]:
+            yield {"type": "node_end", "name": name, "data": event["data"].get("output", {})}
 # 从 quality.py 导入阈值常量，供 run_extraction 使用
 from excel_agent.nodes.quality import QUALITY_THRESHOLD
