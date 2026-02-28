@@ -1,10 +1,17 @@
-import json
-import asyncio
+"""
+main_deep_stream.py — 流式调用示例（调试用，支持列过滤）
+"""
+
+import sys, json, asyncio
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from dotenv import load_dotenv
+load_dotenv(_ROOT / ".env", override=True)
 
-load_dotenv()
-
-# 确保你在 __init__.py 导出了 run_extraction_deep_stream
 from excel_agent import run_extraction_deep_stream
 
 QUALITY_THRESHOLD = 0.75
@@ -15,66 +22,73 @@ async def main():
 
     final_score = 0.0
     retry_count = 0
-    errors = []
-    final_data = None
+    errors      = []
+    final_data  = None
 
-    # 使用 async for 迭代异步流
     async for chunk in run_extraction_deep_stream(
-            excel_path="ws_test_file_use.xlsx",
-            sheet_name="CONFIGURATION",
-            subtable_title="4G Configuration",
-    ):
-        event_type = chunk["type"]
+        excel_path     = "./ws_test_file_use.xlsx",
+        sheet_name     = "CONFIGURATION",
+        subtable_title = "4G Configuration",
 
-        # 打印大模型思考过程（打字机效果）
-        if event_type == "token":
+        # ── 列过滤（取消注释即启用）──────────────────────────
+        target_columns = [
+            {"parent": None,        "child": "SYSTEM MODULE"},
+            {"parent": None,        "child": "CELL"},
+            {"parent": "RF MODULE", "child": "TYPE"},
+            {"parent": "RF MODULE", "child": "QTY."},
+            {"parent": "ANTENNAS",  "child": "NEW/SWAP/EXIST"},
+            {"parent": "ANTENNAS",  "child": "Antenna Type"},
+            {"parent": "ANTENNAS",  "child": "Antenna Qty."},
+            {"parent": "RRU Cable", "child": "POWER LENGTH(m)"},
+            {"parent": "RRU Cable", "child": "OPT LENGTH(m)"},
+            {"parent": "TILT",      "child": "M"},
+            {"parent": "TILT",      "child": "E"},
+        ],
+    ):
+        t = chunk["type"]
+
+        if t == "token":
             print(chunk["content"], end="", flush=True)
 
-        # 打印工具调用
-        elif event_type == "tool_start":
-            print(f"\n\n🔧 [调用工具] {chunk['name']}")
+        elif t == "tool_start":
+            print(f"\n\n🔧 [工具] {chunk['name']}")
             print(f"📦 参数: {json.dumps(chunk['input'], ensure_ascii=False)}")
 
-        elif event_type == "tool_end":
-            print(f"✅ [工具返回] {chunk['name']} 执行完毕\n")
+        elif t == "tool_end":
+            print(f"✅ [工具完成] {chunk['name']}\n")
 
-        # 打印图节点进度，并收集最终状态
-        elif event_type == "node_end":
-            node_name = chunk["name"]
-            print(f"\n🟢 节点 [{node_name}] 执行完毕")
+        elif t == "node_end":
+            node = chunk["name"]
+            data = chunk.get("data", {})
+            print(f"\n🟢 节点 [{node}] 完成")
+            if node == "locate" and data.get("header_map"):
+                hm = data["header_map"]
+                print(f"   表头行数: {hm['header_row_count']}，"
+                      f"子表范围: R{hm['subtable_start_row']}-R{hm['subtable_end_row']} "
+                      f"C{hm['subtable_start_col']}-C{hm['subtable_end_col']}")
+                print(f"   发现列数: {len(hm.get('all_columns', []))}")
+            if "quality_score" in data: final_score = data["quality_score"]
+            if "retry_count"   in data: retry_count = data["retry_count"]
+            if "errors"        in data: errors       = data["errors"]
+            if data.get("final_output"): final_data = data["final_output"]
+            elif data.get("result"):     final_data = data["result"]
 
-            data_update = chunk.get("data", {})
-            if "quality_score" in data_update:
-                final_score = data_update["quality_score"]
-            if "retry_count" in data_update:
-                retry_count = data_update["retry_count"]
-            if "errors" in data_update:
-                errors = data_update["errors"]
-
-            if data_update.get("final_output"):
-                final_data = data_update["final_output"]
-            elif data_update.get("result"):
-                final_data = data_update["result"]
-
-    # --- 最终结果输出 ---
     success = final_score >= QUALITY_THRESHOLD
     print("\n" + "=" * 60)
-    print(f"抽取{'成功 ✓' if success else '失败 ✗（质量不达标）'}")
+    print(f"抽取{'成功 ✓' if success else '失败 ✗'}")
     print(f"质量分：{final_score:.2f}  |  重试次数：{retry_count}")
 
     if errors:
         print("\n⚠ 警告/错误：")
-        for e in errors:
-            print(f"  {e}")
+        for e in errors: print(f"  {e}")
 
     if final_data:
         rows = final_data
-        print(f"\n📋 结果：{len(rows) - 1} 行数据 × {len(rows[0])} 列")
+        print(f"\n📋 结果：{len(rows)-1} 行数据 × {len(rows[0])} 列")
         print(json.dumps(rows, ensure_ascii=False, indent=2))
     else:
         print("\n❌ 无数据输出")
 
 
 if __name__ == "__main__":
-    # 使用 asyncio.run 运行异步主函数
     asyncio.run(main())

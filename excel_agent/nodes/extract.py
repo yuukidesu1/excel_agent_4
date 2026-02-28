@@ -59,7 +59,7 @@ def extract_node(state: AgentState) -> dict:
     col_map    = hmap["column_map"]
     fill_keys  = set(hmap["merge_fill_keys"])  # 需要向前填充的列 key
 
-    wb = openpyxl.load_workbook(state["excel_path"])
+    wb = openpyxl.load_workbook(state["config"]["excel_path"])
     ws = wb[state["sheet_structure"]["sheet_name"]]
     merge_map = _build_merge_map(ws)
 

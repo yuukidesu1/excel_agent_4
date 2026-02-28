@@ -35,7 +35,7 @@ def _row_is_empty(ws, row_idx: int, max_col: int) -> bool:
 
 
 def parse_node(state: AgentState) -> dict:
-    wb         = openpyxl.load_workbook(state["excel_path"])
+    wb         = openpyxl.load_workbook(state["config"]["excel_path"])
     sheet_name = _find_sheet(wb, state["config"]["sheet_name"])
     ws         = wb[sheet_name]
     max_row    = ws.max_row
