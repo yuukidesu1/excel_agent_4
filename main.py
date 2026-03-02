@@ -22,9 +22,16 @@ from excel_agent import run_extraction
 # ── 示例 1：全列模式（保留子表所有列）──────────────────────────
 result = run_extraction(
     excel_path     = "./ws_test_file_use.xlsx",
-    sheet_name     = "WL_asaibaijian",
-    subtable_title = "4G Configuration",
+    sheet_name     = "WL_56A0DS6",
+    subtable_title = "Spcae Available for New RF Antenna(m)",
     # target_columns 不传 = 保留全部列
+    target_columns = [
+        {"parent": None,        "child": "Leg 1"},
+        {"parent": None,        "child": "Leg 2"},
+        {"parent": None,        "child": "Leg 3"},
+        {"parent": None,        "child": "Leg 4"},
+
+    ],
 )
 
 # ── 示例 2：列过滤模式（只保留指定列）──────────────────────────
@@ -44,6 +51,18 @@ result = run_extraction(
 #         {"parent": "RRU Cable", "child": "OPT LENGTH(m)"},
 #         {"parent": "TILT",      "child": "M"},
 #         {"parent": "TILT",      "child": "E"},
+#     ],
+# )
+
+# result = run_extraction(
+#     excel_path     = "./ws_test_file_use.xlsx",
+#     sheet_name     = "WL_56A0DS6",
+#     subtable_title = "Group3 Wirelsee Antenna",
+#     target_columns = [
+#         {"parent": None,        "child": "Sector 1"},
+#         {"parent": None,        "child": "Sector 2"},
+#         {"parent": None,        "child": "Sector 3"},
+
 #     ],
 # )
 

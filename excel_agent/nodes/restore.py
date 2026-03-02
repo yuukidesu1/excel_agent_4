@@ -56,7 +56,7 @@ def _match(col: Dict, target: Dict) -> bool:
 def restore_node(state: AgentState) -> dict:
     all_cols       = state["header_map"]["all_columns"]
     raw_data       = state.get("raw_data") or [[]]
-    target_columns: Optional[List[Dict]] = state.get("target_columns")
+    target_columns: Optional[List[Dict]] = state["config"].get("target_columns")
 
     if target_columns:
         # ── 列过滤模式 ─────────────────────────────────────────
