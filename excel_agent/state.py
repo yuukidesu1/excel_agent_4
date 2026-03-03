@@ -32,14 +32,27 @@ class AgentState(TypedDict):
     #   ]
     # parent=None 时不限父级，只按 child 名称匹配（忽略大小写+空格）
 
-    # ── 节点输出 ───────────────────────────────────────────────
+    # ── parse_node 输出 ───────────────────────────────────────────────
     sheet_structure: Optional[Dict[str, Any]]
-    header_map:      Optional[Dict[str, Any]]
-    raw_data:        Optional[List[List[Any]]]
-    result:          Optional[List[List[str]]]
+
+    # ── code_gen_node 输出 ───────────────────────────────────────────────
+    generated_code: Optional[str]
+
+    # ── locate_node 输出 (修复关键：加回这个字段！) ──
+    header_map: Optional[Dict[str, Any]]
+
+    # ── extract_node 输出 (修复关键：加回这个字段！) ──
+    raw_data: Optional[List[List[Any]]]
+    # ── sandbox_node 输出 ───────────────────────────────────────────────
+    raw_result: Optional[List[List[Any]]]
+    # 代码执行后返回的原始二维数组(含表头行)
+
+    # ── restore_node 输出 ───────────────────────────────────────────────
+    result:     Optional[List[List[str]]]
+    final_result: Optional[List[List[str]]]
 
     # ── 质量控制 ───────────────────────────────────────────────
     quality_score: float
     retry_count:   int
     errors:        List[str]
-    final_output:  Optional[List[List[str]]]
+    sandbox_error: Optional[str] # 代码执行异常信息，重试时传给 LLM

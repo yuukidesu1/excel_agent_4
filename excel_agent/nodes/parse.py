@@ -118,14 +118,27 @@ def parse_node(state: AgentState) -> dict:
             })
             in_block = False
 
-    return {
+    # DEBUG
+    res = {
         "sheet_structure": {
-            "sheet_name":          sheet_name,
-            "max_row":             max_row,
-            "max_col":             max_col,
-            "non_empty_cells":     non_empty_cells,
-            "potential_headers":   potential_headers,
-            "merged_cells_info":   merged_cells_info,
+            "sheet_name": sheet_name,
+            "max_row": max_row,
+            "max_col": max_col,
+            "non_empty_cells": non_empty_cells,
+            "potential_headers": potential_headers,
+            "merged_cells_info": merged_cells_info,
             "potential_subtables": potential_subtables,
         }
     }
+    return res
+    # return {
+    #     "sheet_structure": {
+    #         "sheet_name":          sheet_name,
+    #         "max_row":             max_row,
+    #         "max_col":             max_col,
+    #         "non_empty_cells":     non_empty_cells,
+    #         "potential_headers":   potential_headers,
+    #         "merged_cells_info":   merged_cells_info,
+    #         "potential_subtables": potential_subtables,
+    #     }
+    # }

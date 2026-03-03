@@ -36,6 +36,67 @@ def _norm(s: Optional[str]) -> str:
         return ""
     return s.lower().replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "")
 
+def _find_col_index(header: List[str], target: Dict) -> int:
+    """
+    在表头行中找到 target 对应的列索引（-1 表示未找到）。
+
+    target 格式：{"parent": str|None, "child": str}
+    header 中的列名可能是：
+      - "child"           （单级）
+      - "parent||child"   （双级，LLM 可能用这种格式）
+    """
+    t_child  = _norm(target.get("child", ""))
+    t_parent = target.get("parent")
+
+    for i, h in enumerate(header):
+        if "||" in h:
+            parts = h.split("||", 1)
+            col_parent, col_child = parts[0], parts[1]
+        else:
+            col_parent, col_child = None, h
+
+        if _norm(col_child) != t_child:
+            continue
+        if t_parent is not None and _norm(col_parent) != _norm(t_parent):
+            continue
+        return i
+
+    return -1  # 未找到
+
+def restore_node(state: AgentState) -> dict:
+    raw_result     = state.get("raw_result") or []
+    target_columns = state.get("target_columns")
+
+    if not raw_result:
+        return {"result": [], "final_output": []}
+
+    # ── 格式化所有值 ─────────────────────────────────────────
+    formatted = [[_fmt(cell) for cell in row] for row in raw_result]
+    header    = formatted[0] if formatted else []
+    data_rows = formatted[1:] if len(formatted) > 1 else []
+
+    if target_columns:
+        # ── 列过滤 ───────────────────────────────────────────
+        keep_indices: List[int] = []
+        keep_labels:  List[str] = []
+
+        for target in target_columns:
+            idx = _find_col_index(header, target)
+            keep_indices.append(idx)
+            keep_labels.append(
+                header[idx] if idx >= 0 else f"[未找到]{target.get('child','?')}"
+            )
+
+        new_header = keep_labels
+        new_data   = [
+            [row[i] if (0 <= i < len(row)) else "" for i in keep_indices]
+            for row in data_rows
+        ]
+        result = [new_header] + new_data
+    else:
+        result = [header] + data_rows
+
+    return {"result": result, "final_output": result}
 
 def _match(col: Dict, target: Dict) -> bool:
     """
@@ -53,7 +114,7 @@ def _match(col: Dict, target: Dict) -> bool:
     return True
 
 
-def restore_node(state: AgentState) -> dict:
+def restore_node_(state: AgentState) -> dict:
     all_cols       = state["header_map"]["all_columns"]
     raw_data       = state.get("raw_data") or [[]]
     target_columns: Optional[List[Dict]] = state["config"].get("target_columns")
