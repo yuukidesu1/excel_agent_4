@@ -65,21 +65,21 @@ def extract(ws, merged_map: dict) -> list:
 重要规则：
   1. 只能使用标准库（re, json, math 等），不能 import openpyxl
   2. 合并单元格必须通过 merged_map 处理，不要直接相信 ws.cell().value（合并区域非左上角格为 None）
-  3. 跨行合并列（如 SYSTEM MODULE）需要向前填充（forward-fill）
-  4. 若有双行表头（父级跨列合并 + 子级），需正确拼合列名（如 "ANTENNAS||Antenna Qty."）
+  3. 若有双行表头（父级跨列合并 + 子级），需正确拼合列名（如 "ANTENNAS||Antenna Qty."）
      或直接用子级列名（取决于是否有 target_columns 指定了 parent）
-  5. 行方向子表、列方向子表、嵌套子表等非常规结构，都要正确处理
-  6. 代码必须健壮：行列边界要用变量，不要硬编码"第16行开始"之类的数字
-  7. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
-  8. ⚠️ 绝对禁止在生成的代码中写 `for` 循环去搜索标题、表头或匹配字符串！
+  4. 行方向子表、列方向子表、嵌套子表等非常规结构，都要正确处理
+  5. 代码必须健壮：行列边界要用变量，不要硬编码"第16行开始"之类的数字
+  6. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
+  7. ⚠️ 绝对禁止在生成的代码中写 `for` 循环去搜索标题、表头或匹配字符串！
      你现在已经看到了 sheet_structure，你必须在你的“大脑”里计算好真实的行号和列号。
      在代码中直接使用硬编码的具体数字。
      ✅ 正确示例：subtable_start_row = 19
      ❌ 错误示例：for header in sheet_structure... if "group3" in header...
-  9. 注意：用户提供的 subtable_title 和 target_columns 可能存在拼写错误或缩写。
+  8. 注意：用户提供的 subtable_title 和 target_columns 可能存在拼写错误或缩写。
+     并且可能有多个 subtable_title, 通常会以 "," 分隔开,例如 subtable_title="A, B, C, ..."如果有多个 subtable_title 需要分别独立提取成多个二维数组。
      请发挥你的智能，在 sheet_structure 中找到语义最接近的真实区域和真实列号，
      然后将这些真实的行号、列号、列名写死在你的代码中。
-  10. ★ 可用的上下文变量（沙盒中已注入，直接使用）：
+  9. ★ 可用的上下文变量（沙盒中已注入，直接使用）：
        sheet_structure  — Sheet 完整结构（subtables/potential_headers/merged_cells_info 等）
        subtable_title   — 目标子表标题字符串
        target_columns   — 用户指定的目标列列表（可能为 None）
@@ -116,21 +116,16 @@ def extract(ws, merged_map: dict) -> list:
     else:
         headers = header_row1
 
-    # 3. 读取数据行（含 forward-fill）
+    # 3. 读取数据行（严格按原表读取，禁止随意填充空值）
     data_start = subtable_start_row + header_row_count
-    ffill_cols = set()   # 需要向前填充的列索引（相对于 subtable_start_col）
-    prev = [""] * len(headers)
     rows = [headers]
 
     for r in range(data_start, subtable_end_row + 1):
         row = []
-        for i, c in enumerate(range(subtable_start_col, subtable_end_col + 1)):
-            v = cell_val(r, c)
-            if i in ffill_cols and v == "":
-                v = prev[i]
-            else:
-                prev[i] = v
-            row.append(v)
+        for c in range(subtable_start_col, subtable_end_col + 1):
+            row.append(cell_val(r, c))
+        
+        # 可选过滤逻辑：如果在提取全部列后需要根据 target_columns 过滤，可以在这里进行
         rows.append(row)
 
     return rows

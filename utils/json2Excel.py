@@ -26,4 +26,4 @@ def json_to_excel(data, output_file):
 
 if __name__ == "__main__":
     json_data = read_json_from_stdin()
-    json_to_excel(json_data, "result.xlsx")
+    json_to_excel(json_data, "WL_56A0DS6_excel_agent_glm5_指定行列_抽取结果.xlsx")
