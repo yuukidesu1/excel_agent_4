@@ -71,7 +71,7 @@ def _make_initial(
     sheet_name:     str,
     subtable_titles: List[str],    # 修改 str -> List[str] 以适配多子表抽取
     hints:          Optional[str],
-    target_columns: Optional[List[Dict]],
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]],   # 更新为字典
 ) -> AgentState:
     return {
         "config": {
@@ -99,7 +99,7 @@ def run_extraction(
     sheet_name:     str,
     subtable_titles: List[str],    # str -> List[str]
     hints:          Optional[str]        = None,
-    target_columns: Optional[List[Dict]] = None,
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None,    # 更新为字典
 ) -> dict:
     """
     同步调用入口。

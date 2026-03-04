@@ -35,7 +35,7 @@ _SYSTEM_PROMPT = """\
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 你收到的信息：
   - subtable_titles      : 目标子表的标题关键词列表（List[str]）
-  - target_columns      : 需要抽取的列（None = 抽取全部列）
+  - target_columns      : 需要抽取的列配置。格式为字典，键为子表名，值为该表的列配置（None = 抽取全部列）
   - sheet_structure     : Sheet 的完整结构，包含：
       · potential_subtables : 基于空行切分的候选子表块（含起止行）
       · potential_headers   : 粗体/合并单元格（候选表头）

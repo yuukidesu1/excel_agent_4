@@ -14,7 +14,7 @@ class ConfigState(TypedDict):
     sheet_name: str
     subtable_titles: List[str] # str -> List[str] 以适配多子表抽取
     hints: Optional[str]
-    target_columns: Optional[List[Dict[str, Any]]]
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]]  # target_columns 修改为字典
 
 class AgentState(TypedDict):
 

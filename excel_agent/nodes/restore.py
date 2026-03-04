@@ -84,18 +84,24 @@ def restore_node(state: AgentState) -> dict:
         header = formatted[0] if formatted else []
         data_rows = formatted[1:] if len(formatted) > 1 else []
 
-        if target_columns:
-            # ── 列过滤 ──
+        # 列过滤规则
+        current_targets = None
+        if isinstance(target_columns, dict):
+            current_targets = target_columns.get(title)
+        elif isinstance(target_columns, list):
+            current_targets = target_columns
+
+        if current_targets:
+            # 根据当前子表规则进行过滤
             keep_indices: List[int] = []
             keep_labels: List[str] = []
 
-            for target in target_columns:
+            for target in current_targets:
                 idx = _find_col_index(header, target)
                 keep_indices.append(idx)
                 keep_labels.append(
-                    header[idx] if idx >= 0 else f"[未找到]{target.get('child', '?')}"
+                    header[idx] if idx >= 0 else f"[未找到]{target.get('child','?')}"
                 )
-
             new_header = keep_labels
             new_data = [
                 [row[i] if (0 <= i < len(row)) else "" for i in keep_indices]

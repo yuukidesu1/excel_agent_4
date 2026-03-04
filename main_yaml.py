@@ -103,7 +103,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-c", "--config",
         type=str,
-        default="./configs/generalization_test/MW_56A0DS6.yaml",
+        # default="./configs/generalization_test/MW_56A0DS6.yaml",
+        default="./configs/glm5_TEST.yaml",
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )
     args = parser.parse_args()

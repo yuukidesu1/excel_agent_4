@@ -26,7 +26,7 @@ nodes/quality.py — 质量打分 + 条件路由
 
 
 def quality_node(state: AgentState) -> dict:
-    result = state.get("result", {})  # 🚀 变成了字典
+    result = state.get("result", {})
     errors = list(state.get("errors", []))
     score = 1.0
 
@@ -36,7 +36,6 @@ def quality_node(state: AgentState) -> dict:
         target_titles = [target_titles]
     target_columns = config.get("target_columns") or state.get("target_columns")
 
-    # 校验 1：结果为空字典
     if not result:
         score -= 0.50
         errors.append("[质量] 返回结果为空字典。")
@@ -46,28 +45,36 @@ def quality_node(state: AgentState) -> dict:
     total_data_cells = 0
     empty_data_cells = 0
     missing_cols_count = 0
+    expected_cols_total = 0  # 🚀 新增：用于按比例公平扣分
 
-    # 🚀 校验 2：遍历检查每个表
     for title in target_titles:
         table_data = result.get(title)
 
         if not table_data or len(table_data) <= 1:
             empty_tables += 1
-            errors.append(f"[质量] 子表 '{title}' 无数据行或定位失败。")
+            errors.append(f"[质量] 子表 '{title}' 无数据或定位失败。")
             continue
 
         data_rows = table_data[1:]
         total_data_cells += sum(len(r) for r in data_rows)
         empty_data_cells += sum(1 for r in data_rows for v in r if not v)
 
-        # 检查丢失的列
-        if target_columns and table_data[0]:
-            missing = [h for h in table_data[0] if str(h).startswith("[未找到]")]
-            missing_cols_count += len(missing)
-            if missing:
-                errors.append(f"[质量] 子表 '{title}' 中以下列未找到：{missing}")
+        # 🚀 获取当前子表的列过滤规则
+        current_targets = None
+        if isinstance(target_columns, dict):
+            current_targets = target_columns.get(title)
+        elif isinstance(target_columns, list):
+            current_targets = target_columns
 
-    # 根据统计结果综合扣分
+        # 检查丢失的列
+        if current_targets:
+            expected_cols_total += len(current_targets)  # 累加预期总列数
+            if table_data[0]:
+                missing = [h for h in table_data[0] if str(h).startswith("[未找到]")]
+                missing_cols_count += len(missing)
+                if missing:
+                    errors.append(f"[质量] 子表 '{title}' 中以下列未找到：{missing}")
+
     if empty_tables > 0:
         score -= (0.30 * (empty_tables / len(target_titles)))
 
@@ -77,8 +84,9 @@ def quality_node(state: AgentState) -> dict:
             score -= 0.20
             errors.append(f"[质量] 总体数据空值率过高：{rate:.0%}。")
 
-    if target_columns and missing_cols_count > 0:
-        score -= 0.25 * (missing_cols_count / (len(target_columns) * len(target_titles)))
+    # 🚀 修改扣分逻辑：基于预期总列数扣分
+    if expected_cols_total > 0 and missing_cols_count > 0:
+        score -= 0.25 * (missing_cols_count / expected_cols_total)
 
     return {
         "quality_score": round(max(0.0, min(1.0, score)), 3),
@@ -97,51 +105,4 @@ def route(state: AgentState) -> str:
         return "end"
     if state.get("retry_count", 0) >= MAX_RETRY:
         return "end"
-    return "retry"
-
-def quality_node_(state: AgentState) -> dict:
-    result  = state.get("result", [])
-    hmap    = state.get("header_map", {})
-    errors  = list(state.get("errors", []))
-    score   = 1.0
-
-    # ── 校验 1：结果非空 ─────────────────────────────────────
-    if not result or len(result) < 1:
-        score -= 0.5
-        errors.append("[质量] 结果完全为空，子表定位可能失败。")
-
-    # ── 校验 2：列发现非空 ────────────────────────────────────
-    all_cols = hmap.get("all_columns", [])
-    if not all_cols:
-        score -= 0.3
-        errors.append("[质量] 未发现任何列，请检查子表标题是否正确。")
-
-    # ── 校验 3：数据行空值率 ──────────────────────────────────
-    if result and len(result) > 1:
-        data_rows   = result[1:]
-        total_cells = sum(len(r) for r in data_rows)
-        empty_cells = sum(1 for r in data_rows for v in r if v == "" or v is None)
-        empty_rate  = empty_cells / total_cells if total_cells else 1.0
-        if empty_rate > 0.9 and len(data_rows) > 1:
-            score -= 0.2
-            errors.append(
-                f"[质量] 数据行空值率过高：{empty_rate:.0%}，"
-                f"可能定位到了错误区域，请检查 subtable_titles 是否正确。"
-            )
-
-    # ── 校验 4：数据行数合理性 ────────────────────────────────
-    if result and len(result) <= 1:
-        score -= 0.2
-        errors.append("[质量] 无数据行（仅有表头），子表可能为空或数据行未被识别。")
-
-    score = round(max(0.0, min(1.0, score)), 3)
-    return {"quality_score": score, "errors": errors}
-
-
-def route_(state: AgentState) -> str:
-    """LangGraph 条件路由：通过 → end，不通过 → retry"""
-    if state["quality_score"] >= QUALITY_THRESHOLD:
-        return "end"
-    if state.get("retry_count", 0) >= MAX_RETRY:
-        return "end"   # 达到上限，强制输出现有最佳结果
     return "retry"
