@@ -26,37 +26,59 @@ nodes/quality.py — 质量打分 + 条件路由
 
 
 def quality_node(state: AgentState) -> dict:
-    result  = state.get("result", [])
-    errors  = list(state.get("errors", []))
-    score   = 1.0
+    result = state.get("result", {})  # 🚀 变成了字典
+    errors = list(state.get("errors", []))
+    score = 1.0
 
-    # 校验 1：结果非空
+    config = state.get("config", {})
+    target_titles = config.get("subtable_title") or state.get("subtable_title", [])
+    if isinstance(target_titles, str):
+        target_titles = [target_titles]
+    target_columns = config.get("target_columns") or state.get("target_columns")
+
+    # 校验 1：结果为空字典
     if not result:
         score -= 0.50
-        errors.append("[质量] 结果完全为空。")
+        errors.append("[质量] 返回结果为空字典。")
+        return {"quality_score": max(0.0, score), "errors": errors}
 
-    # 校验 2：无数据行
-    if result and len(result) <= 1:
-        score -= 0.20
-        errors.append("[质量] 无数据行（仅有表头），子表可能为空或数据起始行判断有误。")
+    empty_tables = 0
+    total_data_cells = 0
+    empty_data_cells = 0
+    missing_cols_count = 0
 
-    # 校验 3：数据行空值率过高
-    if result and len(result) > 1:
-        data_rows = result[1:]
-        total     = sum(len(r) for r in data_rows)
-        empty     = sum(1 for r in data_rows for v in r if not v)
-        rate      = empty / total if total else 1.0
-        if rate > 0.9 and len(data_rows) > 1:
+    # 🚀 校验 2：遍历检查每个表
+    for title in target_titles:
+        table_data = result.get(title)
+
+        if not table_data or len(table_data) <= 1:
+            empty_tables += 1
+            errors.append(f"[质量] 子表 '{title}' 无数据行或定位失败。")
+            continue
+
+        data_rows = table_data[1:]
+        total_data_cells += sum(len(r) for r in data_rows)
+        empty_data_cells += sum(1 for r in data_rows for v in r if not v)
+
+        # 检查丢失的列
+        if target_columns and table_data[0]:
+            missing = [h for h in table_data[0] if str(h).startswith("[未找到]")]
+            missing_cols_count += len(missing)
+            if missing:
+                errors.append(f"[质量] 子表 '{title}' 中以下列未找到：{missing}")
+
+    # 根据统计结果综合扣分
+    if empty_tables > 0:
+        score -= (0.30 * (empty_tables / len(target_titles)))
+
+    if total_data_cells > 0:
+        rate = empty_data_cells / total_data_cells
+        if rate > 0.9:
             score -= 0.20
-            errors.append(f"[质量] 数据空值率过高：{rate:.0%}，可能定位偏移或表头行数判断有误。")
+            errors.append(f"[质量] 总体数据空值率过高：{rate:.0%}。")
 
-    # 校验 4：target_columns 中有未找到的列
-    target_columns = state.get("target_columns")
-    if target_columns and result and result[0]:
-        missing = [h for h in result[0] if h.startswith("[未找到]")]
-        if missing:
-            score -= 0.25 * len(missing) / len(target_columns)
-            errors.append(f"[质量] 以下列未找到：{missing}")
+    if target_columns and missing_cols_count > 0:
+        score -= 0.25 * (missing_cols_count / (len(target_columns) * len(target_titles)))
 
     return {
         "quality_score": round(max(0.0, min(1.0, score)), 3),
@@ -104,7 +126,7 @@ def quality_node_(state: AgentState) -> dict:
             score -= 0.2
             errors.append(
                 f"[质量] 数据行空值率过高：{empty_rate:.0%}，"
-                f"可能定位到了错误区域，请检查 subtable_title 是否正确。"
+                f"可能定位到了错误区域，请检查 subtable_titles 是否正确。"
             )
 
     # ── 校验 4：数据行数合理性 ────────────────────────────────

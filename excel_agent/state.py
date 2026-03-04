@@ -2,7 +2,7 @@
 state.py — 全局状态定义
 
 输入：
-    必填：excel_path, sheet_name, subtable_title
+    必填：excel_path, sheet_name, subtable_titles
     可选：target_columns  → 只保留指定列（None = 保留全部）
           hints           → 额外定位提示
 """
@@ -12,7 +12,7 @@ from typing import TypedDict, Optional, List, Dict, Any
 class ConfigState(TypedDict):
     excel_path: str
     sheet_name: str
-    subtable_title: str
+    subtable_titles: List[str] # str -> List[str] 以适配多子表抽取
     hints: Optional[str]
     target_columns: Optional[List[Dict[str, Any]]]
 
@@ -38,18 +38,19 @@ class AgentState(TypedDict):
     # ── code_gen_node 输出 ───────────────────────────────────────────────
     generated_code: Optional[str]
 
-    # ── locate_node 输出 (修复关键：加回这个字段！) ──
+    # ── locate_node 输出──
     header_map: Optional[Dict[str, Any]]
 
-    # ── extract_node 输出 (修复关键：加回这个字段！) ──
+    # ── extract_node 输出──
     raw_data: Optional[List[List[Any]]]
+
     # ── sandbox_node 输出 ───────────────────────────────────────────────
-    raw_result: Optional[List[List[Any]]]
+    raw_result: Optional[Dict[str, List[List[Any]]]]   # Optional[List[List[Any]]] -> Optional[Dict[str, List[List[Any]]]]
     # 代码执行后返回的原始二维数组(含表头行)
 
     # ── restore_node 输出 ───────────────────────────────────────────────
-    result:     Optional[List[List[str]]]
-    final_result: Optional[List[List[str]]]
+    result:     Optional[Dict[str, List[List[str]]]]              # Optional[List[List[str]]] -> Optional[Dict[str, List[List[str]]]]
+    final_result: Optional[Dict[str, List[List[str]]]]            # Optional[List[List[str]]] -> Optional[Dict[str, List[List[str]]]]
 
     # ── 质量控制 ───────────────────────────────────────────────
     quality_score: float

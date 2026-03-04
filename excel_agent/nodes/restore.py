@@ -64,39 +64,49 @@ def _find_col_index(header: List[str], target: Dict) -> int:
     return -1  # 未找到
 
 def restore_node(state: AgentState) -> dict:
-    raw_result     = state.get("raw_result") or []
-    target_columns = state.get("target_columns")
+    raw_result = state.get("raw_result") or {}  # 🚀 变成了字典
+    config = state.get("config", {})
+    target_columns = config.get("target_columns") or state.get("target_columns")
 
     if not raw_result:
-        return {"result": [], "final_output": []}
+        return {"result": {}, "final_output": {}}
 
-    # ── 格式化所有值 ─────────────────────────────────────────
-    formatted = [[_fmt(cell) for cell in row] for row in raw_result]
-    header    = formatted[0] if formatted else []
-    data_rows = formatted[1:] if len(formatted) > 1 else []
+    final_res = {}
 
-    if target_columns:
-        # ── 列过滤 ───────────────────────────────────────────
-        keep_indices: List[int] = []
-        keep_labels:  List[str] = []
+    # 🚀 遍历字典处理每一个子表
+    for title, table_data in raw_result.items():
+        if not table_data:
+            final_res[title] = []
+            continue
 
-        for target in target_columns:
-            idx = _find_col_index(header, target)
-            keep_indices.append(idx)
-            keep_labels.append(
-                header[idx] if idx >= 0 else f"[未找到]{target.get('child','?')}"
-            )
+        # ── 格式化所有值 ──
+        formatted = [[_fmt(cell) for cell in row] for row in table_data]
+        header = formatted[0] if formatted else []
+        data_rows = formatted[1:] if len(formatted) > 1 else []
 
-        new_header = keep_labels
-        new_data   = [
-            [row[i] if (0 <= i < len(row)) else "" for i in keep_indices]
-            for row in data_rows
-        ]
-        result = [new_header] + new_data
-    else:
-        result = [header] + data_rows
+        if target_columns:
+            # ── 列过滤 ──
+            keep_indices: List[int] = []
+            keep_labels: List[str] = []
 
-    return {"result": result, "final_output": result}
+            for target in target_columns:
+                idx = _find_col_index(header, target)
+                keep_indices.append(idx)
+                keep_labels.append(
+                    header[idx] if idx >= 0 else f"[未找到]{target.get('child', '?')}"
+                )
+
+            new_header = keep_labels
+            new_data = [
+                [row[i] if (0 <= i < len(row)) else "" for i in keep_indices]
+                for row in data_rows
+            ]
+            final_res[title] = [new_header] + new_data
+        else:
+            final_res[title] = [header] + data_rows
+
+    # 确保 final_output 的名称与你的 AgentState 中定义的名称对齐
+    return {"result": final_res, "final_output": final_res}
 
 def _match(col: Dict, target: Dict) -> bool:
     """

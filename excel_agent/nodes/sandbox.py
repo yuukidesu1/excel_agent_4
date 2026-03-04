@@ -59,19 +59,24 @@ def _run_with_timeout(fn, timeout_sec: int = 30):
         return fn()
 
 
-def _validate_result(result: Any) -> List[List[Any]]:
+def _validate_result(result: Any) -> Dict[str, List[List[Any]]]:
     """
     校验 extract() 返回值格式。
     空列表不抛异常：让 raw_result=[] 传出，由 quality_node 扣分并触发重试，
     同时把"返回空列表"写入 sandbox_error 告知 LLM，比崩掉报错信息更清晰。
     """
-    if not isinstance(result, list):
-        raise ValueError(f"extract() 必须返回 list，实际返回 {type(result).__name__}")
-    for i, row in enumerate(result):
-        if not isinstance(row, (list, tuple)):
-            raise ValueError(f"第 {i} 行不是 list/tuple，而是 {type(row).__name__}")
-    return [list(r) for r in result]
+    if not isinstance(result, dict):
+        raise ValueError(f"extract() 必须返回 dict，实际返回 {type(result).__name__}")
 
+    validated = {}
+    for key, table_data in result.items():
+        if not isinstance(table_data, list):
+            raise ValueError(f"字典的 value 必须是 list，键 '{key}' 对应的是 {type(table_data).__name__}")
+        for i, row in enumerate(table_data):
+            if not isinstance(row, (list, tuple)):
+                raise ValueError(f"键 '{key}' 的第 {i} 行不是 list/tuple，而是 {type(row).__name__}")
+        validated[key] = [list(r) for r in table_data]
+    return validated
 
 def sandbox_node(state: AgentState) -> dict:
     code       = state.get("generated_code", "")
@@ -98,7 +103,7 @@ def sandbox_node(state: AgentState) -> dict:
 
     # ── 沙盒命名空间：注入所有 LLM 代码可能引用的变量 ──────────
     # 兼容 config 嵌套结构和平铺结构两种 state 设计
-    subtable_title  = config.get("subtable_title")  or state.get("subtable_title", "")
+    subtable_titles  = config.get("subtable_titles")  or state.get("subtable_titles", [])
     target_columns  = config.get("target_columns")  or state.get("target_columns")
     hints           = config.get("hints")           or state.get("hints")
 
@@ -109,7 +114,7 @@ def sandbox_node(state: AgentState) -> dict:
         "json":          json,
         # LLM 代码可直接使用的上下文变量
         "sheet_structure": state["sheet_structure"],
-        "subtable_title":  subtable_title,
+        "subtable_titles":  subtable_titles,
         "target_columns":  target_columns,
         "hints":           hints,
     }
@@ -133,14 +138,13 @@ def sandbox_node(state: AgentState) -> dict:
         raw    = _run_with_timeout(lambda: extract_fn(ws, merged_map))
         result = _validate_result(raw)
 
-        # 空列表：不报错，但写入 sandbox_error 供 LLM 下次修正
-        if len(result) == 0:
+        # 检查字典是否完全为空，或者内部所有列表为空
+        if not result or all(len(v) == 0 for v in result.values()):
             return {
-                "raw_result":    [],
+                "raw_result": {},
                 "sandbox_error": (
-                    "extract() 返回了空列表 []。"
-                    "可能原因：子表标题匹配失败（请用模糊匹配，忽略大小写和空格）"
-                    "或数据行范围判断有误。请检查并修正代码。"
+                    "extract() 返回了空字典或全空列表。"
+                    "请检查所有目标子表的硬编码行号列好是否计算正确。"
                 ),
             }
 

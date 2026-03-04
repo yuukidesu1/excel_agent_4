@@ -1,0 +1,16 @@
+excel_path: "./ws_test_file_use.xlsx"
+sheet_name: "CONFIGURATION"
+subtable_titles: ["2G Configuration", "3G Configuration", "4G Configuration"]
+target_columns:
+  - parent: null
+    child: "SYSTEM MODULE"
+  - parent: null
+    child: "CELL"
+  - parent: "RF MODULE"
+    child: "TYPE"
+  - parent: "RF MODULE"
+    child: "QTY."
+  - parent: "ANTENNAS"
+    child: "NEW/SWAP/EXIST"
+  - parent: "ANTENNAS"
+    child: "Antenna Type"

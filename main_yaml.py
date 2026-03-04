@@ -20,24 +20,24 @@ def main(config_file: str):
 
     excel_path = config.get("excel_path")
     sheet_name = config.get("sheet_name")
-    subtable_title = config.get("subtable_title")
+    subtable_titles = config.get("subtable_titles")
     target_columns = config.get("target_columns", None)
 
-    if not all([excel_path, sheet_name, subtable_title]):
-        raise ValueError("配置文件中必须包含 excel_path, sheet_name 和 subtable_title")
+    if not all([excel_path, sheet_name, subtable_titles]):
+        raise ValueError("配置文件中必须包含 excel_path, sheet_name 和 subtable_titles")
 
     print("="*100)
     print("loading config...")
     print(config_path.name)
     print("="*100)
     print("loading excel...")
-    print(f"📊 目标 Excel: {excel_path} | Sheet: {sheet_name} | 子表: {subtable_title}")
+    print(f"📊 目标 Excel: {excel_path} | Sheet: {sheet_name} | 子表: {subtable_titles}")
     print("="*100)
 
     kwargs = {
         "excel_path": excel_path,
         "sheet_name": sheet_name,
-        "subtable_title": subtable_title,
+        "subtable_titles": subtable_titles,
     }
     if target_columns is not None:
         kwargs["target_columns"] = target_columns
@@ -61,18 +61,49 @@ def main(config_file: str):
     print(result.get("generated_code", "（无）"))
 
     if result.get("data"):
-        rows = result["data"]
-        print(f"\n── 结果：{len(rows) - 1} 行数据 × {len(rows[0])} 列 ──────────────")
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        extracted_data = result["data"]
+
+        # 1. 如果返回的是字典（多个子表）
+        if isinstance(extracted_data, dict):
+            print("\n── 多子表抽取结果汇总 ──────────────────────────────")
+            for table_name, rows in extracted_data.items():
+                if rows and isinstance(rows, list):
+                    # 假设第一行是表头，数据行数为 len(rows) - 1
+                    data_rows = len(rows) - 1 if len(rows) > 0 else 0
+                    cols = len(rows[0]) if data_rows >= 0 and isinstance(rows[0], list) else 0
+                    print(f" 📊 [{table_name}]: {data_rows} 行数据 × {cols} 列")
+                else:
+                    print(f" ⚠ [{table_name}]: 提取结果为空或格式不符")
+            print("──────────────────────────────────────────────────")
+
+        # 2. 如果返回的是二维列表（单个表格，向下兼容）
+        elif isinstance(extracted_data, list):
+            rows = extracted_data
+            if rows:
+                data_rows = len(rows) - 1 if len(rows) > 0 else 0
+                cols = len(rows[0]) if isinstance(rows[0], list) else 0
+                print(f"\n── 单表结果：{data_rows} 行数据 × {cols} 列 ──────────────")
+            else:
+                print("\n── 结果：空列表 ──────────────")
+
+        # 无论哪种格式，都打印完整的 JSON 数据供核对
+        print(json.dumps(extracted_data, ensure_ascii=False, indent=2))
     else:
         print("\n❌ 无数据输出")
+
+    # if result.get("data"):
+    #     rows = result["data"]
+    #     print(f"\n── 结果：{len(rows) - 1} 行数据 × {len(rows[0])} 列 ──────────────")
+    #     print(json.dumps(rows, ensure_ascii=False, indent=2))
+    # else:
+    #     print("\n❌ 无数据输出")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Excel 抽取代理")
     parser.add_argument(
         "-c", "--config",
         type=str,
-        default="./configs/glm5_WL_56A0DS6_multi_subtitle_test.yaml",
+        default="./configs/generalization_test/MW_56A0DS6.yaml",
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )
     args = parser.parse_args()

@@ -69,7 +69,7 @@ def build_agent():
 def _make_initial(
     excel_path:     str,
     sheet_name:     str,
-    subtable_title: str,
+    subtable_titles: List[str],    # 修改 str -> List[str] 以适配多子表抽取
     hints:          Optional[str],
     target_columns: Optional[List[Dict]],
 ) -> AgentState:
@@ -77,7 +77,7 @@ def _make_initial(
         "config": {
             "excel_path": excel_path,
             "sheet_name": sheet_name,
-            "subtable_title": subtable_title,
+            "subtable_titles": subtable_titles,
             "hints": hints,
             "target_columns": target_columns,
         },
@@ -97,7 +97,7 @@ def _make_initial(
 def run_extraction(
     excel_path:     str,
     sheet_name:     str,
-    subtable_title: str,
+    subtable_titles: List[str],    # str -> List[str]
     hints:          Optional[str]        = None,
     target_columns: Optional[List[Dict]] = None,
 ) -> dict:
@@ -107,7 +107,7 @@ def run_extraction(
     参数：
         excel_path      : Excel 文件路径
         sheet_name      : Sheet 名，如 "CONFIGURATION"
-        subtable_title  : 子表标题关键词，如 "4G Configuration"
+        subtable_titles  : 子表标题关键词，如 "4G Configuration"
         hints           : 可选额外提示
         target_columns  : 列过滤，None=全部。示例：
                           [
@@ -140,7 +140,7 @@ def run_extraction(
     # plt.show()
 
     final = agent.invoke(
-        _make_initial(excel_path, sheet_name, subtable_title, hints, target_columns)
+        _make_initial(excel_path, sheet_name, subtable_titles, hints, target_columns)
     )
     return {
         "success":        final["quality_score"] >= QUALITY_THRESHOLD,
@@ -156,7 +156,7 @@ def run_extraction(
 async def run_extraction_deep_stream(
     excel_path:     str,
     sheet_name:     str,
-    subtable_title: str,
+    subtable_titles: List[str],
     hints:          Optional[str]        = None,
     target_columns: Optional[List[Dict]] = None,
 ) -> AsyncGenerator[dict, None]:
@@ -165,7 +165,7 @@ async def run_extraction_deep_stream(
     捕获 Token 吐字、节点完成事件。
     """
     agent   = build_agent()
-    initial = _make_initial(excel_path, sheet_name, subtable_title, hints, target_columns)
+    initial = _make_initial(excel_path, sheet_name, subtable_titles, hints, target_columns)
 
     async for event in agent.astream_events(initial, version="v2"):
         kind = event["event"]

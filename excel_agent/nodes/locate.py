@@ -23,7 +23,7 @@ _SYSTEM_PROMPT = """\
 你是 Excel 结构分析专家。给你一份 Sheet 的结构描述，完成以下四步：
 
 【第一步】定位目标子表
-  在 subtables 中找到 title 最匹配 subtable_title 的块（忽略大小写，允许部分匹配）。
+  在 subtables 中找到 title 最匹配 subtable_titles 的块（忽略大小写，允许部分匹配）。
   输出：subtable_start_row, subtable_end_row, subtable_start_col, subtable_end_col
 
 【第二步】识别表头行数（极其重要，请仔细判断）
@@ -158,7 +158,7 @@ def locate_node(state: AgentState) -> dict:
     # print(f"\n[Locate Node] 接收到的 sheet_structure 的键有: {list(st.keys())}\n")
 
     ctx = {
-        "subtable_title":    state["config"]["subtable_title"],
+        "subtable_titles":    state["config"]["subtable_titles"],
         "sheet_size":        f"{st['max_row']} 行 × {st['max_col']} 列",
         "subtables":         st.get("potential_headers", []),
         "potential_headers": st.get("potential_headers", [])[:120],

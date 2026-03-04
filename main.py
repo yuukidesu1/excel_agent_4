@@ -23,7 +23,7 @@ from excel_agent import run_extraction
 result = run_extraction(
     excel_path     = "./ws_test_file_use.xlsx",
         sheet_name     = "CONFIGURATION",
-        subtable_title = "3G Configuration",
+        subtable_titles = "3G Configuration",
         # target_columns = [
         #     {"parent": None,        "child": "SYSTEM MODULE"},
         #     {"parent": None,        "child": "CELL"},
