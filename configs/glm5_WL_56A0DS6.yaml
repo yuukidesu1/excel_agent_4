@@ -1,8 +1,0 @@
-excel_path: "./ws_test_file_use.xlsx"
-sheet_name: "Power Load Information_56A0DS6"
-subtable_title: "1. DCDU 14B Load Information"
-#target_columns:
-#  - parent: null
-#    child: "DCDU 14B Load Information"
-#  - parent: null
-#    child: "Fuse Capacity"
