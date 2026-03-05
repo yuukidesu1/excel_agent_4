@@ -96,7 +96,7 @@ def extract(ws, merged_map: dict) -> dict:
         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
         if v is None: return ""
         if isinstance(v, float) and v == int(v): return str(int(v))
-        return str(v).strip()
+        return str(v).replace('\n', ' ').replace('\r', '').strip()
 
     result = {}
     

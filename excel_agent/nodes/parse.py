@@ -68,7 +68,7 @@ def parse_node(state: AgentState) -> dict:
                 "coord":  cell.coordinate,
                 "row":    cell.row,
                 "col":    cell.column,
-                "value":  str(cell.value).strip()[:300],    # 清洗换行符
+                "value":  str(cell.value).replace('\n', ' ').replace('\r', '').strip()[:300],    # 清洗换行符
                 "bold":   is_bold,
                 "merged": is_merged,
             }
@@ -87,7 +87,7 @@ def parse_node(state: AgentState) -> dict:
             "max_row":  m.max_row,
             "min_col":  m.min_col,
             "max_col":  m.max_col,
-            "value":    str(top_val).strip() if top_val is not None else "",
+            "value":    str(top_val).replace('\n', ' ').replace('\r', '').strip() if top_val is not None else "",
             "row_span": m.max_row - m.min_row + 1,
             "col_span": m.max_col - m.min_col + 1,
         })
