@@ -68,7 +68,7 @@ def parse_node(state: AgentState) -> dict:
                 "coord":  cell.coordinate,
                 "row":    cell.row,
                 "col":    cell.column,
-                "value":  str(cell.value).strip()[:300],
+                "value":  str(cell.value).strip()[:300],    # 清洗换行符
                 "bold":   is_bold,
                 "merged": is_merged,
             }
