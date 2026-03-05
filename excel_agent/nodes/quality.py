@@ -31,7 +31,10 @@ def quality_node(state: AgentState) -> dict:
     score = 1.0
 
     config = state.get("config", {})
-    target_titles = config.get("subtable_title") or state.get("subtable_title", []) # 修复读取不到config的问题
+    target_titles = (
+        config.get("subtable_titles") or state.get("subtable_titles") or
+        config.get("target_title") or state.get("target_title", [])
+    ) # 修复读取不到config的问题
     if isinstance(target_titles, str):
         target_titles = [target_titles]
     target_columns = config.get("target_columns") or state.get("target_columns")
@@ -80,13 +83,13 @@ def quality_node(state: AgentState) -> dict:
 
     if total_data_cells > 0:
         rate = empty_data_cells / total_data_cells
-        if rate > 0.9:
-            score -= 0.20
+        if rate > 0.85:
+            score -= 0.10
             errors.append(f"[质量] 总体数据空值率过高：{rate:.0%}。")
 
     # 🚀 修改扣分逻辑：基于预期总列数扣分
     if expected_cols_total > 0 and missing_cols_count > 0:
-        score -= 0.25 * (missing_cols_count / expected_cols_total)
+        score -= 0.50 * (missing_cols_count / expected_cols_total)
 
     return {
         "quality_score": round(max(0.0, min(1.0, score)), 3),
