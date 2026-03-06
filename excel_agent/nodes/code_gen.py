@@ -34,8 +34,9 @@ _SYSTEM_PROMPT = """\
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 你收到的信息：
-  - subtable_titles      : 目标子表的标题关键词列表（List[str]）
+  - subtable_titles     : 目标子表的标题关键词列表（List[str]）
   - target_columns      : 需要抽取的列配置。格式为字典，键为子表名，值为该表的列配置（None = 抽取全部列）
+  - reference_code      : 历史同类表格成功抽取的 Python 代码（如果有）
   - sheet_structure     : Sheet 的完整结构
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -59,8 +60,9 @@ def extract(ws, merged_map: dict) -> list:
   3. 【空值处理策略】：必须保持原始空单元格结构，绝对禁止进行向前的逻辑填充（forward-fill）
   4. 【禁止搜索指令】：绝对禁止写 for 循环去搜索标题。你必须在代码中直接使用硬编码的具体数字！
   5. 【表头处理关键】：如果子表存在双行表头（例如第8行是父类，第9行是子类），必须同时读取两行，并用 "||" 拼接！如果是单行表头，只读一行。
-  6. 必须为传入的每一个子表独立提取一份数据。如果表不存在，返回空列表 []。
-  7. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
+  6. 【记忆参考与坐标偏移】：如果上下文提供了 'reference_code'，请直接复用其核心提取逻辑、表头拼接规则和字典组装样式！但是，因为当前 Excel 可能存在增删行，你必须比对组新的 `sheet_structure`，**重新校准并修改 reference_code 中的硬编码行号/列号坐标**。
+  7. 必须为传入的每一个子表独立提取一份数据。如果表不存在，返回空列表 []。
+  8. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 代码模板（参考）：
@@ -122,6 +124,11 @@ def _extract_code(raw: str) -> str:
     # 没有代码块标记，直接返回（容错）
     return raw.strip()
 
+# 新增一个字符串归一化函数
+def _norm_str(s: str) -> str:
+    """剔除所有空格、下划线、标点符号，统一转小写"""
+    return re.sub(r"[\W_]+", "", str(s).lower()) if s else ""
+
 def code_gen_node(state: AgentState) -> dict:
     """高密度压缩测试"""
     st = state["sheet_structure"]
@@ -140,15 +147,16 @@ def code_gen_node(state: AgentState) -> dict:
     matched_subtables = []
 
     for sub in st.get("potential_subtables", []):
-        is_match = any(
-            t.lower() in sub.get("title", "").lower() or
-            any(t.lower() in tc.lower() for tc in sub.get("title_candidates", []))
-            for t in subtable_titles
-        )
+        is_match = False
+        for t in subtable_titles:
+            norm_t = _norm_str(t)
+            if norm_t in _norm_str(sub.get("title", "")) or \
+                any(norm_t in _norm_str(tc) for tc in sub.get("title_candidates", [])):
+                is_match = True
+                break
         if is_match:
             matched_subtables.append(sub)
-            # 扩大视野，包含子表上方 2 行（捕获大标题）和整个表格区域
-            target_rows.update(range(max(1, sub["start_row"] - 2), sub["end_row"] + 2))
+            target_rows.update(range(max(1, sub["start_row"] - 2, sub["end_row"] + 2)))
 
     # 2. 抛弃冗余的 JSON 键名 (row, col, value...)，改用高密度字符串格式
     # 格式如："R10C2:Sector 1"
@@ -182,6 +190,10 @@ def code_gen_node(state: AgentState) -> dict:
 
     if hints:
         ctx["hints"] = hints
+
+    # 将记忆库中的 reference_code 注入到 LLM 的上下文中
+    if state.get("reference_code"):
+        ctx["reference_code"] = state["reference_code"]
 
     # 重试时附上错误，让 LLM 针对性修正
     if sandbox_error:

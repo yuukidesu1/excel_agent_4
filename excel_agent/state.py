@@ -21,19 +21,11 @@ class AgentState(TypedDict):
     # ── 用户输入 ───────────────────────────────────────────────
     config: ConfigState
 
-    # ── 列过滤配置（新增）─────────────────────────────────────
-    # target_columns: Optional[List[Dict[str, Any]]]
-    # None  → 保留子表所有列（全自动）
-    # list  → 只保留指定列，格式：
-    #   [
-    #     {"parent": None,        "child": "CELL"},
-    #     {"parent": "ANTENNAS",  "child": "NEW/SWAP/EXIST"},
-    #     {"parent": "RF MODULE", "child": "TYPE"},
-    #   ]
-    # parent=None 时不限父级，只按 child 名称匹配（忽略大小写+空格）
-
     # ── parse_node 输出 ───────────────────────────────────────────────
     sheet_structure: Optional[Dict[str, Any]]
+
+    # 新增参考代码记忆
+    reference_code: Optional[str]
 
     # ── code_gen_node 输出 ───────────────────────────────────────────────
     generated_code: Optional[str]

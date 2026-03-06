@@ -34,6 +34,7 @@ from excel_agent.nodes.code_gen   import code_gen_node
 from excel_agent.nodes.sandbox    import sandbox_node
 from excel_agent.nodes.restore    import restore_node
 from excel_agent.nodes.quality    import quality_node, route, QUALITY_THRESHOLD
+from excel_agent.memory import get_reference_code, save_reference_code
 
 # 开启 LangSmith 追踪
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -72,6 +73,7 @@ def _make_initial(
     subtable_titles: List[str],    # 修改 str -> List[str] 以适配多子表抽取
     hints:          Optional[str],
     target_columns: Optional[Dict[str, List[Dict[str, Any]]]],   # 更新为字典
+    reference_code: Optional[str] = None,   # 新增入参数
 ) -> AgentState:
     return {
         "config": {
@@ -82,6 +84,8 @@ def _make_initial(
             "target_columns": target_columns,
         },
         "sheet_structure": None,
+        "reference_code": reference_code,
+        "generate_code": None,
         "generated_code":  None,
         "raw_result":      None,
         "raw_data":        None,
@@ -126,7 +130,6 @@ def run_extraction(
         }
     """
     agent = build_agent()
-
     """对编译好的图进行可视化"""
     # import matplotlib.pyplot as plt
     # import matplotlib.image as mpimg
@@ -139,9 +142,17 @@ def run_extraction(
     # plt.axis('off')
     # plt.show()
 
+    # 1. 尝试从记忆库中读取该场景的历史成功代码
+    ref_code = get_reference_code(sheet_name, subtable_titles)
+
     final = agent.invoke(
-        _make_initial(excel_path, sheet_name, subtable_titles, hints, target_columns)
+        _make_initial(excel_path, sheet_name, subtable_titles, hints, target_columns, ref_code)
     )
+    success = final["quality_score"] >= QUALITY_THRESHOLD
+
+    if success and final["quality_score"] >= 0.95 and final.get("generated_code"):
+        save_reference_code(sheet_name, subtable_titles, final["generated_code"])
+
     return {
         "success":        final["quality_score"] >= QUALITY_THRESHOLD,
         "data":           final.get("final_output") or final.get("result"),

@@ -17,9 +17,13 @@ nodes/restore.py — 结果组装 + 列过滤（纯代码）
     - parent 为 None：不限父级，只靠 child 匹配（适合单级表头列）
 """
 
+import re
 from typing import Any, List, Optional, Dict
 from excel_agent.state import AgentState
 
+#  新增归一化函数
+def _norm_str(s: str) -> str:
+    return re.sub(r'[\W_]+', '', str(s).lower()) if s else ""
 
 def _fmt(v: Any) -> str:
     """统一单元格值格式"""
@@ -45,23 +49,28 @@ def _find_col_index(header: List[str], target: Dict) -> int:
       - "child"           （单级）
       - "parent||child"   （双级，LLM 可能用这种格式）
     """
-    t_child  = _norm(target.get("child", ""))
-    t_parent = target.get("parent")
-
+    child = _norm_str(target.get("child", ""))
     for i, h in enumerate(header):
-        if "||" in h:
-            parts = h.split("||", 1)
-            col_parent, col_child = parts[0], parts[1]
-        else:
-            col_parent, col_child = None, h
-
-        if _norm(col_child) != t_child:
-            continue
-        if t_parent is not None and _norm(col_parent) != _norm(t_parent):
-            continue
-        return i
-
-    return -1  # 未找到
+        if child in _norm_str(h):
+            return i
+    return -1
+    # t_child  = _norm(target.get("child", ""))
+    # t_parent = target.get("parent")
+    #
+    # for i, h in enumerate(header):
+    #     if "||" in h:
+    #         parts = h.split("||", 1)
+    #         col_parent, col_child = parts[0], parts[1]
+    #     else:
+    #         col_parent, col_child = None, h
+    #
+    #     if _norm(col_child) != t_child:
+    #         continue
+    #     if t_parent is not None and _norm(col_parent) != _norm(t_parent):
+    #         continue
+    #     return i
+    #
+    # return -1  # 未找到
 
 def restore_node(state: AgentState) -> dict:
     raw_result = state.get("raw_result") or {}  # 🚀 变成了字典
