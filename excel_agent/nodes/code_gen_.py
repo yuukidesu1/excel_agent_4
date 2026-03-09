@@ -34,12 +34,13 @@ _SYSTEM_PROMPT = """\
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 你收到的信息：
-  - subtable_titles           : 目标子表的标题关键词列表（List[str]）
-  - target_columns            : 需要抽取的列配置。格式为字典，键为子表名，值为该表的列配置（None = 抽取全部列）
-  - reference_code            : 历史同类表格成功抽取的 Python 代码（如果有）
-  - reference_similarity      : 参考代码的匹配置信度 (1.0=精确匹配，<1.0=相似匹配)
-  - reference_matched_titles  : 参考代码中匹配的子表名称列表（如果 reference_similarity < 1.0）
-  - sheet_structure           : Sheet 的完整结构
+  - subtable_titles      : 目标子表的标题关键词列表（List[str]）
+  - target_columns      : 需要抽取的列配置。格式为字典，键为子表名，值为该表的列配置（None = 抽取全部列）
+  - sheet_structure     : Sheet 的完整结构，包含：
+      · potential_subtables : 基于空行切分的候选子表块（含起止行）
+      · potential_headers   : 粗体/合并单元格（候选表头）
+      · merged_cells_info   : 所有合并单元格详情（range, min/max row/col, value, row_span, col_span）
+      · non_empty_cells     : 所有非空单元格（row, col, value）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 你必须编写一个名为 `extract` 的函数，签名如下：
@@ -50,30 +51,44 @@ def extract(ws, merged_map: dict) -> list:
     return result  # Dict[str, List[List[str]]]
 ```
 
+参数说明：
+  ws         : openpyxl Worksheet 对象，已加载好，直接读取即可
+  merged_map : 合并单元格填充图，键为 (row, col) 元组，值为该合并区域的实际值
+               使用方式：val = merged_map.get((row, col), ws.cell(row, col).value)
+
 返回值规范：
   - 必须返回一个字典（dict）。
-  - 字典的键为 subtable_titles 中的原名，值为该子表对应的 List[List[str]]。
-  - 第 0 行为列名列表，后续为数据行。
+  - 字典的键（key）为用户传入的 subtable_titless 中的原名。
+  - 字典的值（value）为该字表对应的 List[List[str]]]，所有值转为字符串，None/空值转为""。
+  - 每个二维表的第 0 行为列名列表，后续为数据行。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 重要规则：
   1. 只能使用标准库（re, json, math 等），不能 import openpyxl
-  2. 【合并单元格处理】：必须通过 merged_map 读取
-  3. 【空值处理策略】：必须保持原始空单元格结构，绝对禁止进行向前的逻辑填充（forward-fill）
-  4. 【禁止搜索指令】：绝对禁止写 for 循环去搜索标题。你必须在代码中直接使用硬编码的具体数字！
-  5. 【表头处理关键】：如果子表存在双行表头（例如第8行是父类，第9行是子类），必须同时读取两行，并用 "||" 拼接！如果是单行表头，只读一行。
-  6. 【记忆参考与坐标偏移】：
-     - 如果提供了 'reference_code' 且 reference_similarity == 1.0：说明是完全相同的场景，可以直接复用坐标
-     - 如果 reference_similarity < 1.0：说明是相似场景，必须参考代码逻辑但重新从 sheet_structure 计算坐标
-     - 如果参考代码中的子表数量与目标不一致：只复用匹配子表的提取逻辑，忽略多余子表的代码
-     - 子表匹配规则：数字前缀不同但其余部分相同视为匹配（如 "4G Configuration" ≈ "5G Configuration"）
-     - 如果提供了 'reference_matched_titles'：表示参考代码中这些子表与目标匹配，请复用它们的提取逻辑
-     - 【重要】如果目标子表在参考代码中没有匹配项，必须根据 sheet_structure 从头编写该子表的提取逻辑
-  7. 必须为传入的每一个子表独立提取一份数据。如果表不存在，返回空列表 []。
-  8. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
+  2. 合并单元格必须通过 merged_map 处理，不要直接相信 ws.cell().value（合并区域非左上角格为 None）
+  3. 若有双行表头（父级跨列合并 + 子级），需正确拼合列名（如 "ANTENNAS||Antenna Qty."）
+     或直接用子级列名（取决于是否有 target_columns 指定了 parent）
+  4. 行方向子表、列方向子表、嵌套子表等非常规结构，都要正确处理
+  5. 代码必须健壮：行列边界要用变量，不要硬编码"第16行开始"之类的数字
+  6. 必须为传入的每一个子表独立提取一份数据，放入返回的字典中。如果某个表在 Excel 中不存在，该键对应的值返回空列表 []。
+  7. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
+  8. ⚠️ 绝对禁止在生成的代码中写 `for` 循环去搜索标题、表头或匹配字符串！
+     你现在已经看到了 sheet_structure，你必须在你的“大脑”里计算好真实的行号和列号。
+     在代码中直接使用硬编码的具体数字。
+     ✅ 正确示例：subtable_start_row = 19
+     ❌ 错误示例：for header in sheet_structure... if "group3" in header...
+  9. 注意：用户提供的 subtable_titles 和 target_columns 可能存在拼写错误或缩写。
+     并且可能有多个 subtable_titles, 通常会以 "," 分隔开,例如 subtable_titles="A, B, C, ..."如果有多个 subtable_titles 需要分别独立提取成多个二维数组。
+     请发挥你的智能，在 sheet_structure 中找到语义最接近的真实区域和真实列号，
+     然后将这些真实的行号、列号、列名写死在你的代码中。
+  10. ★ 可用的上下文变量（沙盒中已注入，直接使用）：
+       sheet_structure  — Sheet 完整结构（subtables/potential_headers/merged_cells_info 等）
+       subtable_titles   — 目标子表标题字符串
+       target_columns   — 用户指定的目标列列表（可能为 None）
+       hints            — 额外提示（可能为 None）
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-代码模板（参考）：
+代码模板（参考，根据实际结构调整）：
 
 ```python
 def extract(ws, merged_map: dict) -> dict:
@@ -81,29 +96,22 @@ def extract(ws, merged_map: dict) -> dict:
         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
         if v is None: return ""
         if isinstance(v, float) and v == int(v): return str(int(v))
-        return str(v).replace('\\n', ' ').replace('\\r', '').strip()
+        return str(v).replace('\n', ' ').replace('\r', '').strip()
 
     result = {}
     
     # ==== 提取表1 (硬编码坐标) ====
-    start_col, end_col = 2, 15
-    
-    # 【情形A】如果是双行表头（例如第8行是父类，第9行是子类）：
-    header_row1 = [cell_val(8, c) for c in range(start_col, end_col + 1)]
-    header_row2 = [cell_val(9, c) for c in range(start_col, end_col + 1)]
-    headers_1 = [f"{p}||{c}" if p and str(p) != str(c) else c for p, c in zip(header_row1, header_row2)]
-    
-    # 【情形B】如果是单行表头：
-    # headers_1 = [cell_val(8, c) for c in range(start_col, end_col + 1)]
-
+    # 假设第一个标题为 "Group 1"
+    headers_1 = [cell_val(10, c) for c in range(1, 10)]
     rows_1 = [headers_1]
-    
-    # 读取数据行
-    for r in range(10, 20):
-        rows_1.append([cell_val(r, c) for c in range(start_col, end_col + 1)])
-        
+    for r in range(11, 20):
+        rows_1.append([cell_val(r, c) for c in range(1, 10)])
     result["Group 1"] = rows_1
     
+    # ==== 提取表2 (硬编码坐标) ====
+    # ...
+    # result["Group 2"] = rows_2
+
     return result
 ```
 """
@@ -132,11 +140,6 @@ def _extract_code(raw: str) -> str:
     # 没有代码块标记，直接返回（容错）
     return raw.strip()
 
-# 新增一个字符串归一化函数
-def _norm_str(s: str) -> str:
-    """剔除所有空格、下划线、标点符号，统一转小写"""
-    return re.sub(r"[\W_]+", "", str(s).lower()) if s else ""
-
 def code_gen_node(state: AgentState) -> dict:
     """高密度压缩测试"""
     st = state["sheet_structure"]
@@ -155,16 +158,15 @@ def code_gen_node(state: AgentState) -> dict:
     matched_subtables = []
 
     for sub in st.get("potential_subtables", []):
-        is_match = False
-        for t in subtable_titles:
-            norm_t = _norm_str(t)
-            if norm_t in _norm_str(sub.get("title", "")) or \
-                any(norm_t in _norm_str(tc) for tc in sub.get("title_candidates", [])):
-                is_match = True
-                break
+        is_match = any(
+            t.lower() in sub.get("title", "").lower() or
+            any(t.lower() in tc.lower() for tc in sub.get("title_candidates", []))
+            for t in subtable_titles
+        )
         if is_match:
             matched_subtables.append(sub)
-            target_rows.update(range(max(1, sub["start_row"] - 2, sub["end_row"] + 2)))
+            # 扩大视野，包含子表上方 2 行（捕获大标题）和整个表格区域
+            target_rows.update(range(max(1, sub["start_row"] - 2), sub["end_row"] + 2))
 
     # 2. 抛弃冗余的 JSON 键名 (row, col, value...)，改用高密度字符串格式
     # 格式如："R10C2:Sector 1"
@@ -198,15 +200,6 @@ def code_gen_node(state: AgentState) -> dict:
 
     if hints:
         ctx["hints"] = hints
-
-    # 将记忆库中的 reference_code 注入到 LLM 的上下文中
-    if state.get("reference_code"):
-        ctx["reference_code"] = state["reference_code"]
-        ctx["reference_similarity"] = state.get("reference_similarity", 0.0)
-        # 告知 LLM 哪些子表是匹配的
-        matched_titles = state.get("reference_matched_titles", [])
-        if matched_titles:
-            ctx["reference_matched_titles"] = matched_titles
 
     # 重试时附上错误，让 LLM 针对性修正
     if sandbox_error:

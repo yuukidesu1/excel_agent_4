@@ -26,6 +26,8 @@ class AgentState(TypedDict):
 
     # 新增参考代码记忆
     reference_code: Optional[str]
+    reference_similarity: Optional[float]  # 记忆匹配置信度 (0.0-1.0)
+    reference_matched_titles: Optional[List[str]]  # 匹配的子表名称列表
 
     # ── code_gen_node 输出 ───────────────────────────────────────────────
     generated_code: Optional[str]
