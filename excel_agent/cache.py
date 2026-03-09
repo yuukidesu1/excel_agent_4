@@ -285,7 +285,8 @@ def _expire_old_cache(cache: Dict[str, Any], ttl_days: int = CACHE_TTL_DAYS) -> 
 def get_level1_cache(
     excel_path: str,
     sheet_name: str,
-    subtable_titles: List[str]
+    subtable_titles: List[str],
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None
 ) -> Optional[Dict[str, Any]]:
     """
     获取 Level 1 完全匹配缓存
@@ -300,7 +301,9 @@ def get_level1_cache(
         cache = _load_cache()
 
         file_hash = _compute_file_hash(excel_path)
-        key = f"l1:{file_hash}:{sheet_name}:{'|'.join(sorted(subtable_titles))}"
+        col_hash = _hash_target_columns(target_columns) if target_columns else None
+
+        key = f"l1:{file_hash}:{sheet_name}:{'|'.join(sorted(subtable_titles))}:{col_hash}"
 
         if key in cache:
             entry = cache[key]
@@ -318,14 +321,16 @@ def set_level1_cache(
     subtable_titles: List[str],
     header_map: Dict[str, Any],
     generated_code: str,
-    sheet_structure: Dict[str, Any]
+    sheet_structure: Dict[str, Any],
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None
 ):
     """设置 Level 1 完全匹配缓存"""
     with _cache_lock:
         cache = _load_cache()
 
         file_hash = _compute_file_hash(excel_path)
-        key = f"l1:{file_hash}:{sheet_name}:{'|'.join(sorted(subtable_titles))}"
+        col_hash = _hash_target_columns(target_columns) if target_columns else None
+        key = f"l1:{file_hash}:{sheet_name}:{'|'.join(sorted(subtable_titles))}:{col_hash}"
 
         # 存储结构快照，用于后续验证
         structure_snapshot = {
@@ -361,7 +366,8 @@ def set_level1_cache(
 def get_level2_cache(
     sheet_name: str,
     current_structure: Dict[str, Any],
-    subtable_titles: List[str]
+    subtable_titles: List[str],
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None
 ) -> Optional[Tuple[str, Dict[str, Any], int]]:
     """
     获取 Level 2 结构指纹缓存
@@ -375,7 +381,10 @@ def get_level2_cache(
         cache = _load_cache()
 
         signature = _compute_structure_signature(current_structure, subtable_titles)
-        key = f"l2:{sheet_name}:{signature}"
+        # 强制将请求的具体子表和列配置作为 L2 缓存隔离的关键，防止跨任务串号
+        title_key = "|".join(sorted(subtable_titles))
+        col_hash = _hash_target_columns(target_columns)
+        key = f"l2:{sheet_name}:{signature}:{title_key}:{col_hash}"
 
         if key in cache:
             entry = cache[key]
@@ -426,14 +435,17 @@ def set_level2_cache(
     sheet_structure: Dict[str, Any],
     subtable_titles: List[str],
     header_map: Dict[str, Any],
-    generated_code: str
+    generated_code: str,
+    target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None
 ):
     """设置 Level 2 结构指纹缓存"""
     with _cache_lock:
         cache = _load_cache()
 
         signature = _compute_structure_signature(sheet_structure, subtable_titles)
-        key = f"l2:{sheet_name}:{signature}"
+        title_key = "|".join(sorted(subtable_titles))
+        col_hash = _hash_target_columns(target_columns)
+        key = f"l2:{sheet_name}:{signature}:{title_key}:{col_hash}"
 
         # 存储结构快照
         structure_snapshot = {

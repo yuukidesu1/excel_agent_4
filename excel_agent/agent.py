@@ -163,7 +163,7 @@ def _run_extraction_with_cache(
         )
 
     # ── 步骤 2: 检查 Level 2 结构指纹缓存 ─────────
-    l2_result = get_level2_cache(sheet_name, sheet_structure, subtable_titles)
+    l2_result = get_level2_cache(sheet_name, sheet_structure, subtable_titles, target_columns)
 
     if l2_result:
         cached_code, cached_header_map, row_offset = l2_result
@@ -254,7 +254,8 @@ def _run_full_agent_flow(
             subtable_titles,
             header_map={},  # 暂不需要
             generated_code=generated_code,
-            sheet_structure=final.get("sheet_structure", {})
+            sheet_structure=final.get("sheet_structure", {}),
+            target_columns=target_columns
         )
 
         set_level2_cache(
@@ -262,7 +263,8 @@ def _run_full_agent_flow(
             final.get("sheet_structure", {}),
             subtable_titles,
             header_map={},  # 暂不需要
-            generated_code=generated_code
+            generated_code=generated_code,
+            target_columns=target_columns
         )
 
     return {
@@ -319,7 +321,7 @@ def run_extraction(
     # ═══════════════════════════════════════════════════════════
     # Level 1: 检查完全匹配缓存（最快，毫秒级）
     # ═══════════════════════════════════════════════════════════
-    l1_result = get_level1_cache(excel_path, sheet_name, subtable_titles)
+    l1_result = get_level1_cache(excel_path, sheet_name, subtable_titles, target_columns)
 
     if l1_result:
         cached_code = l1_result.get("generated_code")
