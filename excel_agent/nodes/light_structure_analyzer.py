@@ -171,13 +171,14 @@ def light_structure_analyzer_node(state: AgentState) -> dict:
 
         col_count = 0
         for c in range(1, max_col + 1):
-            has_content = False
-            for r in range(start_row + header_rows, end_row + 1):
+            has_header_content = False
+            # 只扫描表头所在行
+            for r in range(start_row, start_row + header_rows):
                 cell = ws.cell(row=r, column=c)
-                if cell.value is not None:
-                    has_content = True
+                if cell.value is not None and str(cell.value).strip() !="":
+                    has_header_content = True
                     break
-            if has_content:
+            if has_header_content:
                 col_count += 1
 
         fingerprint["subtables"].append({
