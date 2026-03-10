@@ -57,3 +57,11 @@ class AgentState(TypedDict):
     retry_count:   int
     errors:        List[str]
     sandbox_error: Optional[str] # 代码执行异常信息，重试时传给 LLM
+
+    # ── 缓存系统 ───────────────────────────────────────────────
+    cache_hit:     Optional[bool]           # 是否命中缓存
+    cache_level:   Optional[str]            # "l1" | "l2" | "l3"
+    structure_fingerprint: Optional[Dict]   # 结构指纹（用于 L2 缓存）
+    light_structure_fingerprint: Optional[Dict]  # 轻量级结构指纹（用于 L2 缓存查询）
+    analyzer_skipped: Optional[bool]        # 是否跳过结构分析
+    analyzer_skip_reason: Optional[str]     # 跳过原因
