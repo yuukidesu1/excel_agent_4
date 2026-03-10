@@ -51,7 +51,6 @@ def extract(ws, merged_map: dict) -> list:
   - 必须返回一个字典（dict）。
   - 字典的键为 subtable_titles 中的原名，值为该子表对应的 List[List[str]]。
   - 第 0 行为列名列表，后续为数据行。
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 重要规则：
   1. 只能使用标准库（re, json, math 等），不能 import openpyxl
