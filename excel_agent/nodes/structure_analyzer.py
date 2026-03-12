@@ -1,155 +1,87 @@
 """
-nodes/structure_analyzer.py — 结构指纹提取节点
+nodes/structure_analyzer.py — 结构分析与代码拆包节点 (SA)
 
 职责：
-    当代码质量足够高时（quality_score >= 0.8），调用 LLM 分析生成的代码，
-    提取子表的结构信息（起始行、列定义、表头结构等），生成结构指纹用于 L2 缓存。
+    在新架构中，物理结构指纹 (Signature) 已由 PSA 节点纯代码生成。
+    本节点 (SA) 的核心职责是"代码拆解与入档"：
+    当 code_gen 生成了处理多个 missed_subtables 的大段混合代码且跑通后，
+    调用 LLM 将这段代码重构、拆分为针对每个子表独立可运行的 extract 函数。
 
-结构指纹格式：
-    {
-        "sheet_name": "CONFIGURATION",
-        "subtables": [
-            {
-                "title": "4G Configuration",
-                "title_pattern": "4gconfiguration",       # 归一化标题
-                "start_row": 13,                          # 绝对起始行
-                "end_row": 25,
-                "start_col": 2,
-                "end_col": 15,
-                "header_structure": [                      # 表头结构
-                    {"row": 0, "cols": [                  # 第 0 行（相对行号）
-                        {"col": 0, "name": "systemmodule", "span": 1},
-                        {"col": 1, "name": "cell", "span": 1},
-                        {"col": 2, "name": "rfmodule||type", "span": 4},  # 合并单元格
-                    ]},
-                    {"row": 1, "cols": [...]}              # 第 1 行（双行表头）
-                ],
-                "row_count": 10,                           # 数据行数（不含表头）
-                "col_count": 14,                           # 总列数
-            }
-        ],
-        "merge_patterns": [                                # 合并模式（相对坐标）
-            {"rel_row": 0, "rel_col": 2, "col_span": 4},  # 第 0 行第 2 列开始，跨 4 列
-            {"rel_row": 1, "rel_col": 0, "row_span": 5},  # 第 1 行第 0 列开始，跨 5 行
-        ]
-    }
+    拆分后的纯净代码将被存入 state["cache"]["entries"][title]["code"] 中，
+    供最后一个 cache_save 节点存入数据库。
 
-输出放入 state["structure_fingerprint"]，供缓存系统使用。
+优化：
+    如果 missed_subtables 只有一个表，说明生成的代码已经是该表专属的，
+    直接零成本绑定，跳过大模型调用！
 """
 
 import re
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from excel_agent.state import AgentState
+from excel_agent.state import AgentState, CacheState
+from excel_agent.nodes.quality import QUALITY_THRESHOLD
 
 
 _SYSTEM_PROMPT = """\
-你是 Excel 表格结构分析专家。你的任务是从已生成的 Python 抽取代码中逆向分析出表格的结构指纹。
+你是一个资深的 Python 代码重构专家。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-输入信息：
-  - generated_code   : LLM 生成的完整抽取代码
-  - sheet_structure  : Sheet 的原始结构信息（辅助参考）
-  - subtable_titles  : 目标子表标题列表
+【背景与任务】
+我有一段已经测试通过的 Excel 解析代码（generated_code）。这段代码目前的逻辑是**混合**的，它在同一个 `extract` 函数中同时提取了以下多个表格的数据：{missed_subtables}。
+
+为了实现高复用性的缓存机制，我需要你将这段大代码**拆分**成针对每个表格的独立、可运行的提取代码块。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-你的任务：
-  1. 从代码中提取每个子表的精确位置（起始行、结束行、起始列、结束列）
-  2. 分析表头结构（单行/双行表头、列名、合并单元格模式）
-  3. 提取数据行的范围（起始行、结束行）
-  4. 生成标准化的结构指纹
+【重构要求】
+1. **彻底解耦**：拆分后的每段代码必须只专注于提取其对应的那一个表格。删除与该表格无关的其他表格的定位和提取逻辑。
+2. **函数签名必须保持一致**：每个独立代码块都必须包含且只包含一个入口函数：`def extract(ws, merged_map):`，并返回对应表格提取出的二维数组 (List[List]) 或者是只有该表数据的字典。
+3. **保留原汁原味**：不要修改原代码中关于该表格的核心坐标推算、正则提取或数值清洗逻辑，你只是在做"裁剪"和"拆分"。
+4. **无需多余解释**：严格以 JSON 格式输出，Key 为子表名称，Value 为拆分后的完整 Python 代码字符串。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-输出格式（严格返回以下 JSON，不要任何解释）：
+【输出格式样例】
+请严格输出如下 JSON 格式：
 ```json
-{
-  "subtables": [
-    {
-      "title": "原始子表名",
-      "title_pattern": "归一化标题（小写、无空格、无特殊字符）",
-      "start_row": 13,
-      "end_row": 25,
-      "start_col": 2,
-      "end_col": 15,
-      "header_rows": 2,
-      "header_structure": {
-        "row_0": {"cols": [{"col": 0, "name": "systemmodule"}, {"col": 1, "name": "cell"}]},
-        "row_1": {"cols": [{"col": 2, "name": "rfmodule||type"}]}
-      },
-      "data_row_start": 15,
-      "data_row_end": 24,
-      "row_count": 10,
-      "col_count": 14
-    }
-  ],
-  "merge_patterns": [
-    {"rel_row": 0, "rel_col": 2, "col_span": 4, "value": "RF MODULE"},
-    {"rel_row": 1, "rel_col": 0, "row_span": 2, "value": "CELL"}
-  ]
-}
-```
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-分析要点：
-  1. 从代码中的 range(X, Y) 提取行范围
-  2. 从 cell_val(r, c) 提取列范围
-  3. 从 header_row1/header_row2 判断是否双行表头
-  4. 从 merged_map 的使用或注释推断合并模式
-  5. 标题归一化：转小写、去空格、去标点 → "4gconfiguration"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-注意事项：
-  - 所有行号、列号必须是代码中实际使用的硬编码值
-  - header_structure 中的 col 是相对于 start_col 的偏移
-  - merge_patterns 中的 rel_row/rel_col 是相对于子表起始位置的偏移
-  - 如果代码中明确有注释说明合并单元格，优先使用注释信息
+{{
+  "2G Configuration": "def extract(ws, merged_map):\\n    data = []\\n    # ... 这里是专门提取 2G 的原始代码 ...\\n    return data",
+  "4G Configuration": "def extract(ws, merged_map):\\n    data = []\\n    # ... 这里是专门提取 4G 的原始代码 ...\\n    return data"
+}}
 """
-
-
 def _get_llm() -> ChatOpenAI:
-    """获取 LLM 实例（复用 code_gen 的配置）"""
+    """获取 LLM 实例"""
     from dotenv import load_dotenv
+
     for parent in Path(__file__).resolve().parents:
         env_file = parent / ".env"
         if env_file.exists():
             load_dotenv(env_file, override=True)
             break
+
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL") or None
     model = os.getenv("LLM_MODEL", "glm-4")
+
     if not api_key:
         raise ValueError("未找到 OPENAI_API_KEY，请检查 .env 文件。")
+
     return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url)
-
-
-def _normalize_title(title: str) -> str:
-    """归一化标题：小写、去空格、去标点"""
-    # 转小写
-    s = title.lower()
-    # 去除所有空白字符
-    s = re.sub(r'\s+', '', s)
-    # 去除常见标点
-    s = re.sub(r'[^\w\u4e00-\u9fff]', '', s)
-    return s
 
 
 def _extract_json(raw: str) -> Optional[Dict]:
     """从 LLM 输出中提取 JSON"""
-    # 尝试匹配 ```json ... ``` 块
     m = re.search(r'```json\s*([\s\S]*?)```', raw)
+
     if m:
         try:
             return json.loads(m.group(1).strip())
         except json.JSONDecodeError:
             pass
-
-    # 尝试匹配 ``` ... ``` 块
     m = re.search(r'```\s*([\s\S]*?)```', raw)
     if m:
         try:
@@ -157,196 +89,77 @@ def _extract_json(raw: str) -> Optional[Dict]:
         except json.JSONDecodeError:
             pass
 
-    # 尝试直接解析整个输出
     try:
         return json.loads(raw.strip())
     except json.JSONDecodeError:
         return None
 
-
-def _analyze_code_structure(code: str) -> Dict[str, Any]:
-    """
-    从代码中提取结构信息的辅助函数（规则-based）
-    用于预分析，帮助 LLM 更准确地理解代码
-    """
-    info = {
-        "range_patterns": [],
-        "cell_val_patterns": [],
-        "header_patterns": [],
-        "merge_comments": [],
-    }
-
-    # 提取所有 range(X, Y) 模式
-    for m in re.finditer(r'range\((\d+),\s*(\d+)\)', code):
-        info["range_patterns"].append({
-            "start": int(m.group(1)),
-            "end": int(m.group(2)),
-            "context": code[max(0, m.start()-50):m.end()+50]
-        })
-
-    # 提取所有 cell_val(r, c) 模式
-    for m in re.finditer(r'cell_val\((\d+),\s*(\d+)\)', code):
-        info["cell_val_patterns"].append({
-            "row": int(m.group(1)),
-            "col": int(m.group(2)),
-            "context": code[max(0, m.start()-30):m.end()+30]
-        })
-
-    # 提取表头相关注释
-    for m in re.finditer(r'#.*表头|#.*header', code, re.IGNORECASE):
-        info["header_patterns"].append(code[m.start():code.find('\n', m.end())])
-
-    # 提取合并单元格相关注释
-    for m in re.finditer(r'#.*合并|#.*merge', code, re.IGNORECASE):
-        info["merge_comments"].append(code[m.start():code.find('\n', m.end())])
-
-    return info
-
-
 def structure_analyzer_node(state: AgentState) -> dict:
     """
-    结构指纹提取节点
-
-    输入：
-        - generated_code    : 已生成的抽取代码
-        - sheet_structure   : Sheet 结构信息
-        - quality_score     : 质量评分（>= 0.8 才执行）
-        - subtable_titles   : 子表标题列表
-
-    输出：
-        - structure_fingerprint : 结构指纹字典
-        - analyzer_skipped    : 是否跳过分析（质量不足时）
+    代码拆解与入档节点 (SA)
     """
     code = state.get("generated_code", "")
     quality_score = state.get("quality_score", 0.0)
 
-    config = state.get("config", {})
-    subtable_titles = config.get("subtable_titles") or state.get("subtable_titles", [])
+    cache_state: CacheState = state.get("cache", {})
+    missed_subtables = cache_state.get("missed_subtables", [])
+    entries = cache_state.get("entries", {})
 
-    # 质量不足，跳过分析（不浪费 Token）
-    if quality_score < 0.8:
-        return {
-            "structure_fingerprint": None,
-            "analyzer_skipped": True,
-            "skip_reason": f"质量评分 {quality_score} < 0.8，跳过结构分析"
-        }
+    # 1. 基础异常与拦截校验
+    if not code or not missed_subtables:
+        cache_state["analyzer_skipped"] = True
+        cache_state["analyzer_skip_reason"] = "没有产生新代码或无未命中子表，直接跳过。"
+        return {"cache": cache_state}
 
-    if not code:
-        return {
-            "structure_fingerprint": None,
-            "analyzer_skipped": True,
-            "skip_reason": "generated_code 为空"
-        }
+    # 尽管 agent.py 的路由已经拦截了低分，这里再加一层保险
+    if quality_score < QUALITY_THRESHOLD:
+        cache_state["analyzer_skipped"] = True
+        cache_state["analyzer_skip_reason"] = f"代码跑通质量分 {quality_score} 偏低，拒绝将其入库污染缓存。"
+        return {"cache": cache_state}
 
-    # 预分析代码结构
-    code_analysis = _analyze_code_structure(code)
+    # ── ★ 极速优化路径：只有一个子表未命中时，零成本直接绑定！ ──
+    if len(missed_subtables) == 1:
+        single_target = missed_subtables[0]
+        if single_target in entries:
+            entries[single_target]["code"] = code
 
-    st = state.get("sheet_structure", {})
+        cache_state["analyzer_skipped"] = True
+        cache_state["analyzer_skip_reason"] = f"仅存在 1 个目标子表 '{single_target}'，新代码即为其专属代码，跳过 LLM 拆分。"
+        return {"cache": cache_state}
 
-    # 组装给 LLM 的上下文
-    ctx = {
-        "generated_code": code,
-        "subtable_titles": subtable_titles,
-        "sheet_structure": {
-            "sheet_name": st.get("sheet_name", ""),
-            "max_row": st.get("max_row", 0),
-            "max_col": st.get("max_col", 0),
-        },
-        "code_analysis": {
-            "range_patterns": [
-                {"start": p["start"], "end": p["end"], "context": p["context"][:100]}
-                for p in code_analysis["range_patterns"][:20]
-            ],
-            "cell_val_patterns": [
-                {"row": p["row"], "col": p["col"], "context": p["context"][:80]}
-                for p in code_analysis["cell_val_patterns"][:30]
-            ],
-            "header_comments": code_analysis["header_patterns"][:5],
-            "merge_comments": code_analysis["merge_comments"][:5],
-        }
-    }
+    # ── 2. LLM 拆包重构路径 (多个子表时) ──
+    prompt = _SYSTEM_PROMPT.format(missed_subtables=json.dumps(missed_subtables, ensure_ascii=False))
 
     messages = [
-        SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=json.dumps(ctx, ensure_ascii=False, indent=2)),
+        SystemMessage(content=prompt),
+        HumanMessage(content=f"请拆分以下代码：\n```python\n{code}\n```")
     ]
 
     try:
         response = _get_llm().invoke(messages)
-        parsed = _extract_json(response.content)
+        parsed_dict = _extract_json(response.content)
 
-        if parsed is None:
-            return {
-                "structure_fingerprint": None,
-                "analyzer_skipped": True,
-                "skip_reason": "LLM 返回格式无法解析为 JSON",
-                "llm_raw_output": response.content[:500] if response.content else ""
-            }
+        if not parsed_dict:
+            cache_state["analyzer_skipped"] = True
+            cache_state["analyzer_skip_reason"] = "LLM 代码拆分失败，返回格式无法解析为 JSON。"
+            return {"cache": cache_state}
 
-        # 添加归一化标题
-        if "subtables" in parsed:
-            for sub in parsed["subtables"]:
-                if "title" in sub and "title_pattern" not in sub:
-                    sub["title_pattern"] = _normalize_title(sub["title"])
+        # ── 3. 将拆分好的代码填写入 Cache 档案中 ──
+        success_count = 0
+        for table_name, split_code in parsed_dict.items():
+            if table_name in entries:
+                entries[table_name]["code"] = split_code
+                success_count += 1
 
-        # 添加元数据
-        fingerprint = {
-            **parsed,
-            "_meta": {
-                "quality_score": quality_score,
-                "created_from_code": True,
-                "sheet_name": st.get("sheet_name", "")
-            }
-        }
+        # ★ 关键修复：重新赋值 entries 到 cache_state，确保 LangGraph 状态系统能检测到变化
+        cache_state["entries"] = entries
 
-        return {
-            "structure_fingerprint": fingerprint,
-            "analyzer_skipped": False
-        }
+        cache_state["analyzer_skipped"] = False
+        cache_state["analyzer_skip_reason"] = f"成功通过 LLM 拆分了 {success_count} 个子表的专属代码。"
+
+        return {"cache": cache_state}
 
     except Exception as e:
-        return {
-            "structure_fingerprint": None,
-            "analyzer_skipped": True,
-            "skip_reason": f"分析过程异常：{str(e)}"
-        }
-
-
-def compute_structure_signature(fingerprint: Dict[str, Any]) -> str:
-    """
-    从结构指纹计算哈希签名（用于 L2 缓存 Key）
-
-    签名应满足：
-    - 相同的表格结构 → 相同的签名
-    - 不同的表格结构 → 不同的签名
-    - 与绝对位置无关（只关心相对结构）
-    """
-    import hashlib
-
-    if not fingerprint:
-        return ""
-
-    # 提取与结构相关的核心特征（排除绝对位置）
-    signature_data = {
-        "sheet_name": fingerprint.get("_meta", {}).get("sheet_name", ""),
-        "subtables": []
-    }
-
-    for sub in fingerprint.get("subtables", []):
-        sig_sub = {
-            "title_pattern": sub.get("title_pattern", ""),
-            "header_rows": sub.get("header_rows", 1),
-            "row_count": sub.get("row_count", 0),
-            "col_count": sub.get("col_count", 0),
-            "header_structure": sub.get("header_structure", {}),
-        }
-        signature_data["subtables"].append(sig_sub)
-
-    # 添加合并模式
-    signature_data["merge_patterns"] = fingerprint.get("merge_patterns", [])
-
-    # 计算哈希
-    serialized = json.dumps(signature_data, sort_keys=True, ensure_ascii=False)
-    hash_value = hashlib.sha256(serialized.encode()).hexdigest()[:16]
-
-    return hash_value
+        cache_state["analyzer_skipped"] = True
+        cache_state["analyzer_skip_reason"] = f"拆分代码过程发生异常：{str(e)}"
+        return {"cache": cache_state}

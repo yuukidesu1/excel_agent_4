@@ -1,4 +1,4 @@
-excel_path: "./ws_test_file_use2.xlsx"
+excel_path: "./ws_test_file_use.xlsx"
 sheet_name: "CONFIGURATION"
 subtable_titles: ["2G Configuration", "4G Configuration", "5G Configuration"]
 target_columns:

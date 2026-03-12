@@ -606,6 +606,8 @@ def _adjust_header_map(
     col_offset: int
 ) -> Dict:
     """调整 header_map 中的坐标"""
+    if not header_map:
+        return {}
     adjusted = header_map.copy()
 
     # 调整子表边界

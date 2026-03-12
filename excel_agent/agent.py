@@ -16,7 +16,7 @@ agent.py — LangGraph 图组装 + 对外入口（支持三级缓存）
       ↓
   quality_node [代码]
       ↓
-  structure_analyzer_node [LLM] (质量>=0.8 时提取结构指纹)
+  structure_analyzer_node [LLM] (质量>=QUALITY_THRESHOLD 时提取结构指纹)
       ↓
   cache_save_node [缓存] (保存 L1+L2)
       ↓
@@ -53,7 +53,7 @@ from langgraph.graph import StateGraph, END
 
 from excel_agent.state import AgentState
 from excel_agent.nodes.parse import parse_node
-from excel_agent.nodes.light_structure_analyzer import light_structure_analyzer_node
+from excel_agent.nodes.pre_structure_analyzer import pre_structure_analyzer_node
 from excel_agent.nodes.code_gen import code_gen_node
 from excel_agent.nodes.sandbox import sandbox_node
 from excel_agent.nodes.restore import restore_node
@@ -73,55 +73,41 @@ def _retry_node(state: AgentState) -> dict:
 
 
 def _route_after_cache(state: AgentState) -> str:
-    """缓存查询后路由：命中→sandbox，未命中→code_gen"""
-    if state.get("cache_hit"):
+    """缓存查询后路由：全量命中→跳过LLM直接sandbox，部分/全未命中→code_gen"""
+    cache_state = state.get("cache", {})
+    if cache_state.get("all_cached", False):
         return "sandbox"
     return "code_gen"
 
 
 def _route_after_quality(state: AgentState) -> str:
     """
-    质量检查后路由：
-    - 通过 + 来自缓存 → 直接结束（无需重复分析/保存）
-    - 通过 + 来自 LLM → structure_analyzer → cache_save
-    - 失败 → retry
-    """
-    # 如果数据来自缓存，不需要重复分析和保存
-    if state.get("cache_hit"):
+        质量检查后路由：
+        - 全量命中且跑完的 → 直接结束（没产生新代码，无需分析保存）
+        - 有新产生代码的 + 质量达标 → structure_analyzer -> cache_save
+        - 质量不达标 → retry
+        """
+    cache_state = state.get("cache", {})
+
+    # 如果所有子表都命中了缓存，直接结束，不走后续的保存流
+    if cache_state.get("all_cached", False):
         return "end"
 
-    # 来自 LLM 生成
+    # 以下是有 LLM 新生成代码的情况
     if state["quality_score"] >= QUALITY_THRESHOLD:
         return "analyze"
     if state.get("retry_count", 0) >= 3:
-        return "analyze"  # 超过重试上限，仍然分析结构以便未来复用
+        return "analyze"  # 超过重试上限，死马当活马医，保存备用
     return "retry"
 
-
-def _route_final(state: AgentState) -> str:
-    """最终路由：决定是结束还是重试"""
-    if state.get("cache_hit"):
-        # 缓存命中的情况，质量达标就直接结束
-        if state["quality_score"] >= QUALITY_THRESHOLD:
-            return "end"
-        # 缓存命中的代码质量不达标，重试也解决不了（还是同样的缓存）
-        # 所以直接结束
-        return "end"
-
-    # 非缓存命中，按质量路由
-    if state["quality_score"] >= QUALITY_THRESHOLD:
-        return "end"
-    if state.get("retry_count", 0) >= 3:
-        return "end"
-    return "retry"
 
 
 def build_agent():
     g = StateGraph(AgentState)
 
-    # 添加节点
+    # 1. 注册所有节点
     g.add_node("parse", parse_node)
-    g.add_node("light_structure_analyzer", light_structure_analyzer_node)
+    g.add_node("pre_structure_analyzer", pre_structure_analyzer_node)
     g.add_node("cache_query", cache_query_node)
     g.add_node("code_gen", code_gen_node)
     g.add_node("sandbox", sandbox_node)
@@ -131,37 +117,33 @@ def build_agent():
     g.add_node("cache_save", cache_save_node)
     g.add_node("retry", _retry_node)
 
-    # 设置流程
+    # 2. 定义边 (数据流)
     g.set_entry_point("parse")
-    g.add_edge("parse", "light_structure_analyzer")
-    g.add_edge("light_structure_analyzer", "cache_query")
+    g.add_edge("parse", "pre_structure_analyzer")
+    g.add_edge("pre_structure_analyzer", "cache_query")
 
-    # 缓存查询后分流
+    # 3. 缓存路由：决定是否调用 LLM
     g.add_conditional_edges("cache_query", _route_after_cache, {
         "sandbox": "sandbox",
         "code_gen": "code_gen"
     })
 
-    # 从 code_gen 或 sandbox 继续
     g.add_edge("code_gen", "sandbox")
     g.add_edge("sandbox", "restore")
     g.add_edge("restore", "quality")
 
-    # 质量检查后决定：通过→分析结构，失败→重试；缓存命中→直接结束
+    # 4. 质量控制路由：决定重试还是去切分保存代码
     g.add_conditional_edges("quality", _route_after_quality, {
         "analyze": "structure_analyzer",
         "retry": "retry",
         "end": END
     })
 
-    # 结构分析后保存缓存
     g.add_edge("structure_analyzer", "cache_save")
-
-    # 缓存保存后结束
     g.add_edge("cache_save", END)
 
-    # 重试逻辑
-    g.add_edge("retry", "code_gen")  # 重试跳过 parse 和 cache_query，直接重新生成
+    # 5. 重试逻辑：回到 code_gen 重新生成（针对未命中的子表）
+    g.add_edge("retry", "code_gen")
 
     return g.compile()
 
@@ -192,12 +174,14 @@ def _make_initial(
         "errors": [],
         "sandbox_error": None,
         # 缓存相关
-        "cache_hit": None,
-        "cache_level": None,
-        "structure_fingerprint": None,
-        "light_structure_fingerprint": None,
-        "analyzer_skipped": None,
-        "analyzer_skip_reason": None,
+        "cache": {
+            "entries": {},
+            "all_cached": False,
+            "partial_cached": False,
+            "missed_subtables": [],
+            "analyzer_skipped": False,
+            "analyzer_skip_reason": None,
+        }
     }
 
 
@@ -208,32 +192,7 @@ def run_extraction(
     hints: Optional[str] = None,
     target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> dict:
-    """
-    同步调用入口（支持三级缓存）。
 
-    参数：
-        excel_path      : Excel 文件路径
-        sheet_name      : Sheet 名，如 "CONFIGURATION"
-        subtable_titles  : 子表标题关键词，如 "4G Configuration"
-        hints           : 可选额外提示
-        target_columns  : 列过滤，None=全部。示例：
-                          [
-                            {"parent": None, "child": "CELL"},
-                            {"parent": "ANTENNAS", "child": "Antenna Qty."},
-                          ]
-
-    返回：
-        {
-            "success":        bool,
-            "data":           Dict[str, List[List[str]]],
-            "quality_score":  float,
-            "retry_count":    int,
-            "errors":         List[str],
-            "generated_code": str,
-            "cache_hit":      bool,      # 是否命中缓存
-            "cache_level":    str,       # "l1" | "l2" | "l3"
-        }
-    """
     agent = build_agent()
 
     final = agent.invoke(
@@ -249,8 +208,8 @@ def run_extraction(
         "generated_code": final.get("generated_code", ""),
         "sandbox_error": final.get("sandbox_error"),
         # 缓存信息
-        "cache_hit": final.get("cache_hit"),
-        "cache_level": final.get("cache_level"),
+        "all_cached": final.get("cache", {}).get("all_cached", False),
+        "partial_cached": final.get("cache", {}).get("partial_cached", False),
     }
 
 

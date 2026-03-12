@@ -1,5 +1,11 @@
 """
-nodes/sandbox.py — 沙盒执行节点（纯代码）
+nodes/sandbox.py — 沙盒执行节点（双轨执行架构）
+
+职责：
+    1. Track 1: 运行命中缓存的独立子表代码 (提取 cache 里的数据)。
+    2. Track 2: 运行 LLM 生成的新代码 (提取 missed_subtables 的数据)。
+    3. 合并两次执行的结果，返回给后端的 restore / quality 节点校验。
+    4. 将执行成功的数据回写进 CacheState 的第四阶段 (extracted_data)，供 SA 节点打包。
 """
 
 import re
@@ -11,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import openpyxl
 
-from excel_agent.state import AgentState
+from excel_agent.state import AgentState, CacheState
 
 
 _SAFE_BUILTINS = {
@@ -56,15 +62,12 @@ def _run_with_timeout(fn, timeout_sec: int = 30):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
     except (ImportError, AttributeError):
+        # 兼容 Windows 系统无 SIGALRM 的情况
         return fn()
 
 
 def _validate_result(result: Any) -> Dict[str, List[List[Any]]]:
-    """
-    校验 extract() 返回值格式。
-    空列表不抛异常：让 raw_result=[] 传出，由 quality_node 扣分并触发重试，
-    同时把"返回空列表"写入 sandbox_error 告知 LLM，比崩掉报错信息更清晰。
-    """
+    """校验 extract() 返回值格式。"""
     if not isinstance(result, dict):
         raise ValueError(f"extract() 必须返回 dict，实际返回 {type(result).__name__}")
 
@@ -78,82 +81,112 @@ def _validate_result(result: Any) -> Dict[str, List[List[Any]]]:
         validated[key] = [list(r) for r in table_data]
     return validated
 
-def sandbox_node(state: AgentState) -> dict:
-    code       = state.get("generated_code", "")
-    config     = state.get("config", {})
-    excel_path = config.get("excel_path") or state.get("excel_path", "")
-    sheet_name = state["sheet_structure"]["sheet_name"]
 
-    if not code:
-        return {
-            "raw_result":    None,
-            "sandbox_error": "generated_code 为空。",
-        }
+def sandbox_node(state: AgentState) -> dict:
+    config = state.get("config", {})
+    excel_path = config.get("excel_path") or state.get("excel_path", "")
+    sheet_name = config.get("sheet_name", "")
+
+    cache_state: CacheState = state.get("cache", {})
+    entries = cache_state.get("entries", {})
+
+    # 兼容处理配置字段
+    target_configs = config.get("subtable_configs") or config.get("target_columns")
+    hints = config.get("hints")
 
     try:
-        wb = openpyxl.load_workbook(excel_path)
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
         ws = wb[sheet_name]
     except Exception as e:
         return {
-            "raw_result":    None,
-            "sandbox_error": f"无法打开 Excel 文件：{e}",
+            "raw_result": None,
+            "sandbox_error": f"沙盒无法打开 Excel 文件：{e}",
         }
 
     merged_map = _build_merge_map(ws)
 
-    # ── 沙盒命名空间：注入所有 LLM 代码可能引用的变量 ──────────
-    # 兼容 config 嵌套结构和平铺结构两种 state 设计
-    subtable_titles  = config.get("subtable_titles")  or state.get("subtable_titles", [])
-    target_columns  = config.get("target_columns")  or state.get("target_columns")
-    hints           = config.get("hints")           or state.get("hints")
+    final_raw_result: Dict[str, List[List[Any]]] = {}
+    errors: List[str] = []
 
-    namespace = {
-        "__builtins__":  _SAFE_BUILTINS,
-        "re":            re,
-        "math":          math,
-        "json":          json,
-        # LLM 代码可直接使用的上下文变量
-        "sheet_structure": state["sheet_structure"],
-        "subtable_titles":  subtable_titles,
-        "target_columns":  target_columns,
-        "hints":           hints,
+    # ==========================================================
+    # ── 双轨执行 Track 1: 运行命中缓存的独立子表代码 ──
+    # ==========================================================
+    for title, entry in entries.items():
+        if entry.get("cache_hit") and entry.get("code"):
+            try:
+                # 为每个缓存代码提供独立的纯净命名空间
+                namespace = {
+                    "__builtins__": _SAFE_BUILTINS,
+                    "re": re, "math": math, "json": json
+                }
+                exec(compile(entry["code"], f"<cached_{title}>", "exec"), namespace)
+                extract_fn = namespace.get("extract")
+
+                if callable(extract_fn):
+                    sub_res = _run_with_timeout(lambda: extract_fn(ws, merged_map))
+
+                    # 鲁棒性兼容：SA节点拆分出的代码可能返回二维数组，也可能返回字典 {title: 二维数组}
+                    if isinstance(sub_res, dict):
+                        sub_res = sub_res.get(title) or (list(sub_res.values())[0] if sub_res else [])
+
+                    final_raw_result[title] = sub_res
+                    entry["extracted_data"] = sub_res  # 填入 Stage 4，供后续 SA 打包
+                else:
+                    errors.append(f"缓存代码 [{title}] 中未找到 extract 函数。")
+            except Exception:
+                errors.append(f"缓存代码 [{title}] 执行失败:\n{traceback.format_exc()}")
+
+
+    # ==========================================================
+    # ── 双轨执行 Track 2: 运行 LLM 新生成的代码 (针对 missed_subtables) ──
+    # ==========================================================
+    new_code = state.get("generated_code", "")
+    missed_subtables = cache_state.get("missed_subtables", [])
+
+    if new_code and missed_subtables:
+        namespace = {
+            "__builtins__": _SAFE_BUILTINS,
+            "re": re, "math": math, "json": json,
+            "sheet_structure": state.get("sheet_structure"),
+            "subtable_titles": missed_subtables,  # LLM 只需知道它该负责哪些表
+            "target_columns": target_configs,
+            "hints": hints,
+        }
+
+        try:
+            exec(compile(new_code, "<llm_generated>", "exec"), namespace)
+            extract_fn = namespace.get("extract")
+
+            if callable(extract_fn):
+                raw_llm = _run_with_timeout(lambda: extract_fn(ws, merged_map))
+                llm_dict = _validate_result(raw_llm)
+
+                # 将 LLM 跑出来的数据合并到最终结果中
+                for title, data in llm_dict.items():
+                    final_raw_result[title] = data
+                    # 同步更新到 cache entries 里，准备给 SA 节点存库用
+                    if title in entries:
+                        entries[title]["extracted_data"] = data
+            else:
+                errors.append("新生成的代码中未找到 extract(ws, merged_map) 函数。")
+        except TimeoutError as e:
+            errors.append(f"新生成的代码执行超时: {str(e)}")
+        except Exception:
+            errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
+
+
+    # ==========================================================
+    # ── 3. 结果合并与校验 ──
+    # ==========================================================
+    sandbox_error_str = "\n".join(errors) if errors else None
+
+    # 如果所有表的结果都是空字典或空列表，视同执行失败，交给 Quality 节点扣分打回
+    if not final_raw_result or all(not v for v in final_raw_result.values()):
+        if not sandbox_error_str:
+            sandbox_error_str = "提取失败：所有执行轨道均未返回有效数据 (空字典或全空列表)。请检查硬编码行号或逻辑是否错误。"
+
+    return {
+        "raw_result": final_raw_result,
+        "sandbox_error": sandbox_error_str,
+        "cache": cache_state  # 将装满 extracted_data 的 cache 写回状态
     }
-
-    try:
-        exec(compile(code, "<llm_generated>", "exec"), namespace)
-    except Exception:
-        return {
-            "raw_result":    None,
-            "sandbox_error": f"代码编译/定义阶段报错：\n{traceback.format_exc()}",
-        }
-
-    extract_fn = namespace.get("extract")
-    if not callable(extract_fn):
-        return {
-            "raw_result":    None,
-            "sandbox_error": "代码中未找到 extract 函数，请确保定义了 def extract(ws, merged_map)。",
-        }
-
-    try:
-        raw    = _run_with_timeout(lambda: extract_fn(ws, merged_map))
-        result = _validate_result(raw)
-
-        # 检查字典是否完全为空，或者内部所有列表为空
-        if not result or all(len(v) == 0 for v in result.values()):
-            return {
-                "raw_result": {},
-                "sandbox_error": (
-                    "extract() 返回了空字典或全空列表。"
-                    "请检查所有目标子表的硬编码行号列好是否计算正确。"
-                ),
-            }
-
-        return {"raw_result": result, "sandbox_error": None}
-
-    except TimeoutError as e:
-        return {"raw_result": None, "sandbox_error": str(e)}
-    except Exception:
-        return {
-            "raw_result":    None,
-            "sandbox_error": f"extract() 执行时报错：\n{traceback.format_exc()}",
-        }
