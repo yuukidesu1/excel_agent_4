@@ -200,7 +200,7 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
             col_headers = tc_def.get("col_headers", [])
             row_headers = tc_def.get("row_headers", [])
         elif isinstance(tc_def, list):
-            # ★ 这里的逻辑专门处理你旧版的 parent/child YAML 列表结构 ★
+            # 旧版的 parent/child YAML 列表结构
             layout = "仅列"
             for item in tc_def:
                 if isinstance(item, dict):

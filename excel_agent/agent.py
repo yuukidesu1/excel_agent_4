@@ -64,7 +64,7 @@ from excel_agent.nodes.cache_save import cache_save_node
 
 # 开启 LangSmith 追踪
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = "LangGraph_Debug_Test"
+os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
 os.environ["LANGCHAIN_API_KEY"] = "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"
 
 
