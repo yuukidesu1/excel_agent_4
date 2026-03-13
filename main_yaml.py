@@ -21,7 +21,8 @@ def main(config_file: str):
     excel_path = config.get("excel_path")
     sheet_name = config.get("sheet_name")
     subtable_titles = config.get("subtable_titles")
-    target_columns = config.get("target_columns", None)
+    # target_columns = config.get("target_columns", None)
+    subtable_configs = config.get("subtable_configs") or config.get("target_columns")
 
     if not all([excel_path, sheet_name, subtable_titles]):
         raise ValueError("配置文件中必须包含 excel_path, sheet_name 和 subtable_titles")
@@ -39,8 +40,8 @@ def main(config_file: str):
         "sheet_name": sheet_name,
         "subtable_titles": subtable_titles,
     }
-    if target_columns is not None:
-        kwargs["target_columns"] = target_columns
+    if subtable_configs is not None:
+        kwargs["subtable_configs"] = subtable_configs
 
     print("开始执行抽取任务...")
     result = run_extraction(**kwargs)
@@ -91,12 +92,7 @@ def main(config_file: str):
     else:
         print("\n❌ 无数据输出")
 
-    # if result.get("data"):
-    #     rows = result["data"]
-    #     print(f"\n── 结果：{len(rows) - 1} 行数据 × {len(rows[0])} 列 ──────────────")
-    #     print(json.dumps(rows, ensure_ascii=False, indent=2))
-    # else:
-    #     print("\n❌ 无数据输出")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Excel 抽取代理")
@@ -105,7 +101,7 @@ if __name__ == "__main__":
         type=str,
         # default="./configs/TSSR_senario_TEST.yaml",
         # default="./configs/generalization_test/CONFIGURATION.yaml",
-        # default="./configs/generalization_test/MW_56A0DS6.yaml",
+        # default="./configs/generalization_test/MW_56A0DS6_col.yaml",
         default="./configs/generalization_test/WL_56A0DS6.yaml",
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )

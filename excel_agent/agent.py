@@ -47,11 +47,11 @@ agent.py — LangGraph 图组装 + 对外入口（支持三级缓存）
 import sys
 import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any, AsyncGenerator
+from typing import Optional, List, Dict, Any, AsyncGenerator, Union
 
 from langgraph.graph import StateGraph, END
 
-from excel_agent.state import AgentState
+from excel_agent.state import AgentState, SubtableConfig
 from excel_agent.nodes.parse import parse_node
 from excel_agent.nodes.pre_structure_analyzer import pre_structure_analyzer_node
 from excel_agent.nodes.code_gen import code_gen_node
@@ -153,7 +153,8 @@ def _make_initial(
     sheet_name: str,
     subtable_titles: List[str],
     hints: Optional[str],
-    target_columns: Optional[Dict[str, List[Dict[str, Any]]]],
+    # target_columns: Optional[Dict[str, List[Dict[str, Any]]]],
+    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]]
 ) -> AgentState:
     return {
         "config": {
@@ -161,7 +162,7 @@ def _make_initial(
             "sheet_name": sheet_name,
             "subtable_titles": subtable_titles,
             "hints": hints,
-            "target_columns": target_columns,
+            "subtable_configs": subtable_configs,
         },
         "sheet_structure": None,
         "generated_code": None,
@@ -190,8 +191,8 @@ def run_extraction(
     sheet_name: str,
     subtable_titles: List[str],
     hints: Optional[str] = None,
-    target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-) -> dict:
+    # target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]] = None) -> dict:
 
     agent = build_agent()
 
@@ -215,7 +216,7 @@ def run_extraction(
     # plt.show()
 
     final = agent.invoke(
-        _make_initial(excel_path, sheet_name, subtable_titles, hints, target_columns)
+        _make_initial(excel_path, sheet_name, subtable_titles, hints, subtable_configs)
     )
 
     return {

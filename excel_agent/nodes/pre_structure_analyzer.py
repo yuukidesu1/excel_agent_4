@@ -224,7 +224,9 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
         if layout in ["仅列", "交叉"] and col_headers:
             col_h = _scan_headers(
                 cell_map, merged_map,
-                sr + tr_span, min(sr + tr_span + 10, max_row),
+                # 🚨 修改这里：起始行从 sr + tr_span 改为 sr
+                # 这样即使标题在最左侧合并了多行，与其同行（右侧）的表头也不会被漏掉
+                sr, min(sr + tr_span + 15, max_row),
                 sc, max_col,
                 col_headers, "col", sr, sc
             )
@@ -232,10 +234,26 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
         if layout in ["仅行", "交叉"] and row_headers:
             row_h = _scan_headers(
                 cell_map, merged_map,
-                sr + tr_span, max_row,
-                sc, min(sc + 5, max_col),
+                sr, max_row,  # 这里也同步放宽，从 sr 开始
+                # 🚨 修改这里：起始列从 sc 改为 sc
+                sc, min(sc + tr_span + 10, max_col),  # 适应行表头可能存在的偏移
                 row_headers, "row", sr, sc
             )
+        # if layout in ["仅列", "交叉"] and col_headers:
+        #     col_h = _scan_headers(
+        #         cell_map, merged_map,
+        #         sr + tr_span, min(sr + tr_span + 10, max_row),
+        #         sc, max_col,
+        #         col_headers, "col", sr, sc
+        #     )
+        #
+        # if layout in ["仅行", "交叉"] and row_headers:
+        #     row_h = _scan_headers(
+        #         cell_map, merged_map,
+        #         sr + tr_span, max_row,
+        #         sc, min(sc + 5, max_col),
+        #         row_headers, "row", sr, sc
+        #     )
 
         # ── 4. 计算精准结构指纹 (Signature) ──
         fingerprint_data = {
