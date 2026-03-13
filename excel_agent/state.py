@@ -7,14 +7,24 @@ state.py — 全局状态定义
           hints           → 额外定位提示
 """
 
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any, Union
+
+
+class SubtableConfig(TypedDict, total=False):
+    """
+    单个子表的详细抽取配置
+    """
+    layout: str     # “仅行” ｜ “仅列” ｜ “交叉”
+    col_headers: List[str]
+    row_headers: List[str]
 
 class ConfigState(TypedDict):
     excel_path: str
     sheet_name: str
     subtable_titles: List[str] # str -> List[str] 以适配多子表抽取
     hints: Optional[str]
-    target_columns: Optional[Dict[str, List[Dict[str, Any]]]]
+    # target_columns: Optional[Dict[str, List[Dict[str, Any]]]]
+    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]]
 
 class SubtableCacheEntry(TypedDict):
     """
@@ -26,6 +36,9 @@ class SubtableCacheEntry(TypedDict):
     signature: str          # 该子表的 L2 结构指纹
     start_row: int          # 起始行
     start_col: int          # 起始列
+
+    # 增加一个 PSA 识别出的物理布局类型
+    layout_type: str
 
     # 二阶段，由 cache_query 节点查询数据库后写入
     cache_hit: bool         # 是否命中缓存
