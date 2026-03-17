@@ -37,7 +37,7 @@ def quality_node(state: AgentState) -> dict:
     ) # 修复读取不到config的问题
     if isinstance(target_titles, str):
         target_titles = [target_titles]
-    target_columns = config.get("target_columns") or state.get("target_columns")
+    target_columns = config.get("subtable_configs") or config.get("target_columns") or state.get("subtable_configs") or state.get("target_columns")
 
     if not result:
         score -= 0.50
