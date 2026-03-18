@@ -100,11 +100,11 @@ if __name__ == "__main__":
         "-c", "--config",
         type=str,
         # default="./configs/TSSR_senario_TEST.yaml",
-        # default="./configs/generalization_test/CONFIGURATION.yaml",
+        default="./configs/generalization_test/CONFIGURATION2.yaml",
         # default="./configs/generalization_test/MW_56A0DS6_col.yaml",
         # default="./configs/generalization_test/WL_56A0DS6.yaml",
         # default="./configs/test/test_horizontal.yaml",
-        default="./configs/generalization_test/Power_56A0NNC.yaml",
+        # default="./configs/generalization_test/Power_56A0NNC.yaml",
         # default="./configs/test/test_cross.yaml",
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )

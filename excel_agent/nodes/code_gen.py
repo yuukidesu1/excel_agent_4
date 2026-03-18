@@ -69,32 +69,8 @@ def extract(ws, merged_map: dict) -> dict:
         return str(v).replace('\\n', ' ').replace('\\r', '').strip()
 
     result = {}
-    # ==== 示例 1: 处理 kv (同行平铺键值对) ====
-    # 假设 psa_hints 给出 start_row=10，且要找的字段在 subtable_configs 中
-    start_row = 10
-    target_fields = ["Leg 1", "Leg 2", "Leg 3", "Leg 4"]
-    
-    headers_kv = target_fields
-    data_row_kv = []
-    
-    # 遍历字段寻找对应的值（扩大搜索范围，应对键名散布在不同行和列的情况）
-    for field in target_fields:
-        val = ""
-        found = False
-        # 🚀 优化点：将搜索范围从 start_row+2 扩大到 start_row+25
-        for r in range(start_row, start_row + 25): 
-            for c in range(1, ws.max_column + 1):
-                if cell_val(r, c) == field:
-                    # 找到键后，值通常在其右侧一列
-                    val = cell_val(r, c + 1)
-                    found = True
-                    break
-            if found: break
-        data_row_kv.append(val)
-        
-    result["KV Table"] = [headers_kv, data_row_kv]
 
-    # ==== 示例 2: 处理 vertical (纵表) ====
+    # ==== 示例 1: 处理 vertical (纵表) ====
     # 假设 psa_hints 给出 start_row=5, start_col=1
     start_row, start_col = 5, 1
     header_row = start_row + 1 # 动态调整
@@ -106,7 +82,7 @@ def extract(ws, merged_map: dict) -> dict:
         rows_1.append([cell_val(r, c) for c in range(data_col_start, data_col_end + 1)])
     result["Vertical Table"] = rows_1
 
-    # ==== 示例 3: 处理 horizontal (横表) ====
+    # ==== 示例 2: 处理 horizontal (横表) ====
     # 假设 psa_hints 给出 start_row=15, start_col=1
     h_start_row, h_start_col = 15, 1
     header_col = h_start_col 
@@ -119,7 +95,7 @@ def extract(ws, merged_map: dict) -> dict:
         rows_2.append([cell_val(r, c) for r in range(data_row_start, data_row_end + 1)])
     result["Horizontal Table"] = rows_2
 
-    # ==== 示例 4: 处理 cross (交叉表) ====
+    # ==== 示例 3: 处理 cross (交叉表) ====
     # 假设 psa_hints 给出 start_row=30, start_col=1
     c_start_row, c_start_col = 30, 1
     col_headers_row = c_start_row       # 上方的列表头
