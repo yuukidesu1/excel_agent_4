@@ -1,25 +1,16 @@
 """
-nodes/structure_analyzer.py — 结构分析与代码拆包节点 (SA)
+nodes/structure_analyzer.py — 结构分析与代码解耦节点 (SA)
 
-职责：
-    在新架构中，物理结构指纹 (Signature) 已由 PSA 节点纯代码生成。
-    本节点 (SA) 的核心职责是"代码拆解与入档"：
-    当 code_gen 生成了处理多个 missed_subtables 的大段混合代码且跑通后，
-    调用 LLM 将这段代码重构、拆分为针对每个子表独立可运行的 extract 函数。
-
-    拆分后的纯净代码将被存入 state["cache"]["entries"][title]["code"] 中，
-    供最后一个 cache_save 节点存入数据库。
-
-优化：
-    如果 missed_subtables 只有一个表，说明生成的代码已经是该表专属的，
-    直接零成本绑定，跳过大模型调用！
+核心逻辑：
+遍历所有未命中的子表，将带有硬编码的原代码和该表的物理锚点喂给 LLM。
+LLM 通过“数学做减法”，将原代码中的绝对行号/列号，替换为基于 start_row/col 的相对偏移运算。
 """
 
 import re
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -27,139 +18,102 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from excel_agent.state import AgentState, CacheState
 from excel_agent.nodes.quality import QUALITY_THRESHOLD
 
-
 _SYSTEM_PROMPT = """\
-你是一个资深的 Python 代码重构专家。
+你是一个资深的 Python 架构师。你的任务是对“一次性”的 Excel 提取脚本进行“参数化重构”。
+初级工程师写死了所有的行号和列号。你需要将目标子表的逻辑剥离，并将绝对坐标转换为基于 `start_row` 和 `start_col` 的相对偏移量。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【背景与任务】
-我有一段已经测试通过的 Excel 解析代码（generated_code）。这段代码目前的逻辑是**混合**的，它在同一个 `extract` 函数中同时提取了以下多个表格的数据：{missed_subtables}。
-
-为了实现高复用性的缓存机制，我需要你将这段大代码**拆分**成针对每个表格的独立、可运行的提取代码块。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【重构要求】
-1. **彻底解耦**：拆分后的每段代码必须只专注于提取其对应的那一个表格。删除与该表格无关的其他表格的定位和提取逻辑。
-2. **函数签名必须保持一致**：每个独立代码块都必须包含且只包含一个入口函数：`def extract(ws, merged_map):`，并返回对应表格提取出的二维数组 (List[List]) 或者是只有该表数据的字典。
-3. **保留原汁原味**：不要修改原代码中关于该表格的核心坐标推算、正则提取或数值清洗逻辑，你只是在做"裁剪"和"拆分"。
-4. **无需多余解释**：严格以 JSON 格式输出，Key 为子表名称，Value 为拆分后的完整 Python 代码字符串。
+【核心重构任务】
+1. 剥离专属逻辑：只提取处理当前【目标子表】的代码。
+2. 修改函数签名：你必须重构为 `def extract(ws, merged_map: dict, start_row: int, start_col: int) -> list:` 
+   （注意：返回值直接是二维数组 list，不要返回 dict）。
+3. 坐标相对化 (极度重要！通过做减法替换数字)：
+   将所有写死的绝对行号和列号，替换为传入的 `start_row` 和 `start_col` 的加减法运算。
+   - 举例 (行)：如果提示中告诉你该表起步 start_row=4，而原代码写了 `data_start_row = 6`，你必须改写为 `data_start_row = start_row + 2`。
+   - 举例 (列)：如果起步 start_col=1，而原代码写了 `cols = [2, 3, 4, 5, 9, 10]`，你必须改写为 `cols = [start_col + 1, start_col + 2, start_col + 3, start_col + 4, start_col + 8, start_col + 9]`。
+   - 举例 (探针)：原代码中的 `cell_val(r, 2)`，必须改写为 `cell_val(r, start_col + 1)`。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【输出格式样例】
-请严格输出如下 JSON 格式：
-```json
+【输出格式】
+严格返回 JSON：
 {{
-  "2G Configuration": "def extract(ws, merged_map):\\n    data = []\\n    # ... 这里是专门提取 2G 的原始代码 ...\\n    return data",
-  "4G Configuration": "def extract(ws, merged_map):\\n    data = []\\n    # ... 这里是专门提取 4G 的原始代码 ...\\n    return data"
+  "refactored_code": "def extract(ws, merged_map: dict, start_row: int, start_col: int):\\n    def cell_val(r, c):\\n        # ...\\n    # 基于 start_row 的重构逻辑\\n    return table_list"
 }}
 """
-def _get_llm() -> ChatOpenAI:
-    """获取 LLM 实例"""
-    from dotenv import load_dotenv
 
+def _get_llm() -> ChatOpenAI:
+    from dotenv import load_dotenv
     for parent in Path(__file__).resolve().parents:
         env_file = parent / ".env"
         if env_file.exists():
             load_dotenv(env_file, override=True)
             break
-
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL") or None
-    model = os.getenv("LLM_MODEL", "glm-4")
-
-    if not api_key:
-        raise ValueError("未找到 OPENAI_API_KEY，请检查 .env 文件。")
-
+    # 推荐使用强推理模型做逻辑重构
+    model = os.getenv("LLM_MODEL", "glm-4-plus")
     return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url)
 
-
 def _extract_json(raw: str) -> Optional[Dict]:
-    """从 LLM 输出中提取 JSON"""
     m = re.search(r'```json\s*([\s\S]*?)```', raw)
-
     if m:
-        try:
-            return json.loads(m.group(1).strip())
-        except json.JSONDecodeError:
-            pass
+        try: return json.loads(m.group(1).strip())
+        except: pass
     m = re.search(r'```\s*([\s\S]*?)```', raw)
     if m:
-        try:
-            return json.loads(m.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    try:
-        return json.loads(raw.strip())
-    except json.JSONDecodeError:
-        return None
+        try: return json.loads(m.group(1).strip())
+        except: pass
+    try: return json.loads(raw.strip())
+    except: return None
 
 def structure_analyzer_node(state: AgentState) -> dict:
-    """
-    代码拆解与入档节点 (SA)
-    """
     code = state.get("generated_code", "")
     quality_score = state.get("quality_score", 0.0)
-
     cache_state: CacheState = state.get("cache", {})
     missed_subtables = cache_state.get("missed_subtables", [])
     entries = cache_state.get("entries", {})
 
-    # 1. 基础异常与拦截校验
     if not code or not missed_subtables:
         cache_state["analyzer_skipped"] = True
-        cache_state["analyzer_skip_reason"] = "没有产生新代码或无未命中子表，直接跳过。"
+        cache_state["analyzer_skip_reason"] = "没有产生新代码或无未命中子表，跳过。"
         return {"cache": cache_state}
-
-    # 尽管 agent.py 的路由已经拦截了低分，这里再加一层保险
+    # ———————————————— DEBUG ——————————————————
     if quality_score < QUALITY_THRESHOLD:
+    # if quality_score < 2.0:
         cache_state["analyzer_skipped"] = True
-        cache_state["analyzer_skip_reason"] = f"代码跑通质量分 {quality_score} 偏低，拒绝将其入库污染缓存。"
+        cache_state["analyzer_skip_reason"] = f"质量分 {quality_score} 过低，拒绝入库。"
         return {"cache": cache_state}
 
-    # ── ★ 极速优化路径：只有一个子表未命中时，零成本直接绑定！ ──
-    if len(missed_subtables) == 1:
-        single_target = missed_subtables[0]
-        if single_target in entries:
-            entries[single_target]["code"] = code
+    success_count = 0
+    for title in missed_subtables:
+        if title not in entries:
+            continue
 
-        cache_state["analyzer_skipped"] = True
-        cache_state["analyzer_skip_reason"] = f"仅存在 1 个目标子表 '{single_target}'，新代码即为其专属代码，跳过 LLM 拆分。"
-        return {"cache": cache_state}
+        entry_meta = entries[title]
+        # 提取当前子表真实的物理锚点
+        s_row = entry_meta.get("start_row", 1)
+        s_col = entry_meta.get("start_col", 1)
 
-    # ── 2. LLM 拆包重构路径 (多个子表时) ──
-    prompt = _SYSTEM_PROMPT.format(missed_subtables=json.dumps(missed_subtables, ensure_ascii=False))
+        human_msg = (
+            f"【目标子表】: {title}\n"
+            f"【该表的物理锚点 (用于计算偏移量)】: start_row={s_row}, start_col={s_col}\n\n"
+            f"请重构以下代码中处理 '{title}' 的部分：\n"
+            f"```python\n{code}\n```"
+        )
 
-    messages = [
-        SystemMessage(content=prompt),
-        HumanMessage(content=f"请拆分以下代码：\n```python\n{code}\n```")
-    ]
+        try:
+            response = _get_llm().invoke([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human_msg)])
+            parsed_dict = _extract_json(response.content)
 
-    try:
-        response = _get_llm().invoke(messages)
-        parsed_dict = _extract_json(response.content)
-
-        if not parsed_dict:
-            cache_state["analyzer_skipped"] = True
-            cache_state["analyzer_skip_reason"] = "LLM 代码拆分失败，返回格式无法解析为 JSON。"
-            return {"cache": cache_state}
-
-        # ── 3. 将拆分好的代码填写入 Cache 档案中 ──
-        success_count = 0
-        for table_name, split_code in parsed_dict.items():
-            if table_name in entries:
-                entries[table_name]["code"] = split_code
+            if parsed_dict and "refactored_code" in parsed_dict:
+                entries[title]["code"] = parsed_dict["refactored_code"]
                 success_count += 1
+            else:
+                print(f"  ⚠ [SA节点] '{title}' 代码重构失败：JSON解析异常。")
+        except Exception as e:
+            print(f"  ⚠ [SA节点] 处理 '{title}' 时发生异常：{str(e)}")
 
-        # ★ 关键修复：重新赋值 entries 到 cache_state，确保 LangGraph 状态系统能检测到变化
-        cache_state["entries"] = entries
-
-        cache_state["analyzer_skipped"] = False
-        cache_state["analyzer_skip_reason"] = f"成功通过 LLM 拆分了 {success_count} 个子表的专属代码。"
-
-        return {"cache": cache_state}
-
-    except Exception as e:
-        cache_state["analyzer_skipped"] = True
-        cache_state["analyzer_skip_reason"] = f"拆分代码过程发生异常：{str(e)}"
-        return {"cache": cache_state}
+    cache_state["entries"] = entries
+    cache_state["analyzer_skipped"] = False
+    cache_state["analyzer_skip_reason"] = f"成功通过 LLM 解耦了 {success_count}/{len(missed_subtables)} 个子表的代码。"
+    return {"cache": cache_state}

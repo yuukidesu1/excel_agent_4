@@ -123,7 +123,7 @@ def sandbox_node(state: AgentState) -> dict:
                 extract_fn = namespace.get("extract")
 
                 if callable(extract_fn):
-                    sub_res = _run_with_timeout(lambda: extract_fn(ws, merged_map))
+                    sub_res = _run_with_timeout(lambda: extract_fn(ws, merged_map, entry.get("start_row"), entry.get("start_col")))
 
                     # 鲁棒性兼容：SA节点拆分出的代码可能返回二维数组，也可能返回字典 {title: 二维数组}
                     if isinstance(sub_res, dict):

@@ -6,7 +6,7 @@ LLM 的任务：
     2. 基于 psa_hints 明确子表的 layout_type（纵表/横表/交叉表）和物理锚点。
     3. 根据 subtable_configs 定位目标行列
     4. 编写完整的 Python 抽取函数，使用 openpyxl 直接读取数据
-    5. 函数必须返回 Dict[str, List[List[str]]]（标准二维数组，第0行为列名）
+    5. 函数必须返回 Dict[str, List[List[str]]]（标准二维数组，第 0 行为列名）
 """
 
 import json
@@ -19,48 +19,33 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from excel_agent.state import AgentState
 
-
 _SYSTEM_PROMPT = """\
-你是顶尖的 Excel 数据抽取算法专家。我会给你一份 Excel Sheet 的完整结构描述以及前置分析器(PSA)给出的精准提示。
-你需要编写一段 Python 代码，使用已加载好的 openpyxl Worksheet 对象抽取指定子表的数据。
+你是顶尖的 Excel 数据抽取专家。请根据传入的结构视图和前置分析器 (PSA) 提示，编写 Python 代码抽取数据。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-你收到的核心上下文信息：
-  - subtable_titles   : 目标子表的标题关键词列表
-  - subtable_configs  : 抽取配置。指明了用户想要提取的 col_headers(列方向) 或 row_headers(行方向)
-  - psa_hints         : 前置分析器提供的终极提示！包含该子表的 layout_type(布局)、start_row(起始行)和start_col(起始列)
-  - sheet_structure   : 包含合并单元格、非空单元格的压缩视图
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【输入上下文信息】
+  - subtable_titles   : 目标子表名称列表
+  - subtable_configs  : 抽取配置（包含需要的 col_headers 或 row_headers）
+  - psa_hints         : 提供子表的 layout_type(布局)、start_row(起步行)、start_col(起步列)
+  - sheet_structure   : 包含非空/合并单元格的坐标与值
 
-你必须编写一个名为 `extract` 的函数，签名如下：
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【输出与红线规则】
+你必须编写一个名为 `extract(ws, merged_map: dict) -> dict` 的函数。
+返回值必须是 Dict[str, List[List[str]]]，键为子表名，值为二维数组。
+
+核心红线规则（违反将导致系统崩溃）：
+1. 提取策略降维：无论是 vertical(纵表)、horizontal(横表) 还是 cross(交叉表)，你的任务仅仅是把它们当作普通的二维网格提取出来。第 0 行为列名，后续为数据行。不要去执行展平 (Melt) 等复杂操作。
+2. 绝对坐标硬编码（极度重要）：你【绝对不能】在代码中调用上下文变量名（会报 NameError）。你必须直接观察上下文，将具体的起始行号、提取列号【写死】在代码里（例如 `cols = [2, 3, 5]`）。
+3. 动态终止探针：绝对不能写死结束行（如 `while r < 20`），必须使用 `while r <= ws.max_row`，并通过探测主键列为空来 `break`。
+4. 单元格读取：必须通过 `merged_map.get((r, c), ws.cell(row=r, column=c).value)` 读取。
+5. 多级表头处理：如果配置中包含 `||` 符号的多级表头（如 `"RF MODULE||TYPE"`），
+   你必须使用 `_h(r, c, depth)` 函数从 Excel 中读取垂直堆叠的表头单元格并拼接。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【代码骨架模板 (请严格参考此范式)】
 
 ```python
-def extract(ws, merged_map: dict) -> dict:
-    ...
-    return result  # 必须返回 Dict[str, List[List[str]]]
-```
-返回值规范：
-字典的键为 subtable_titles 中的原名，值为该子表对应的 List[List[str]]。
-无论原表是哪种布局，返回的 List[List[str]] 中，第 0 行必须是字段名列表，后续为数据行。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
- 极其重要的布局处理规则 (基于 psa_hints["layout_type"])：
-1. 【vertical (仅列/纵表)】：数据向下延伸。
-    变体警告：子表的大标题可能在表格的【正上方】，也可能在表格的【最左侧】！
-        若标题在上方：表头通常在标题行的下方。
-        若标题在左侧（合并单元格）：表头通常与标题位于【同一行】，但在其【右侧】列！
-    你需要仔细观察 sample_cells 的坐标关系，灵活定位真实的表头行，然后再向下提取数据。
-2. 【horizontal (仅行/横表)】：表头在左侧同列，数据向右延伸！你必须通过行名定位行坐标，然后向右遍历读取！
-3. 【cross (交叉表)】：既有行表头又有列表头！你需要分别定位行表头的列范围和列表头的行范围，提取交叉点的值。通常建议将其展平(Melt)为类似于 ["行维度", "列维度", "数值"] 的一维记录返回，或者按照 subtable_configs 要求返回。
-4. 【合并单元格处理】：必须通过 merged_map.get((r, c), ws.cell(row=r, column=c).value) 读取！绝对不能直接访问 merged_cells 属性！
-5. 【空值策略】：保持原始空单元格为空字符串 ""，绝对禁止使用 forward-fill 导致数据污染。
-6. 【锚点利用】：绝对禁止写全表 for 循环去盲搜标题！你必须基于 psa_hints 提供的 start_row 和 start_col 圈定搜索和提取的边界。
-7. 代码包在 python ...  中，不要输出额外解释！
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-代码模板(参考)：
 def extract(ws, merged_map: dict) -> dict:
     def cell_val(r, c):
         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
@@ -68,56 +53,62 @@ def extract(ws, merged_map: dict) -> dict:
         if isinstance(v, float) and v == int(v): return str(int(v))
         return str(v).replace('\\n', ' ').replace('\\r', '').strip()
 
+    def _h(r, c, depth=2):
+        '''构建多级表头键 (如 '父||子')。
+        从第 r 行开始向下读取 depth 行，拼接非空单元格值。
+        用于处理 Excel 中垂直堆叠的多级表头结构。
+        '''
+        parts = []
+        for i in range(depth):
+            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
+            if v:
+                parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())
+        return "||".join(parts) if parts else ""
+
     result = {}
 
-    # ==== 示例 1: 处理 vertical (纵表) ====
-    # 假设 psa_hints 给出 start_row=5, start_col=1
-    start_row, start_col = 5, 1
-    header_row = start_row + 1 # 动态调整
-    data_col_start, data_col_end = start_col, start_col + 10
+    # ==== 示例 1: 纵表 (或交叉表) 的提取范式 ====
+    # 【不要写循环找列！直接从上下文中观察出需要的绝对列号并写死】
+    # 【重要：如果配置中包含 "父||子" 形式的多级表头，必须使用 _h() 函数构建！】
+    # 观察 Excel 表头位置：第 5 行是表头起始行
+    header_row = 5
+    # 使用 _h() 读取多级表头 (如 "RF MODULE||TYPE")
+    headers_1 = [_h(header_row, c, depth=2) for c in [2, 3, 4, 5, 9, 10]]
+    # 如果表头是单级的，也可以直接写死：headers_1 = ["Header A", "Header B"]
 
-    headers_1 = [cell_val(header_row, c) for c in range(data_col_start, data_col_end + 1)]
-    rows_1 = [headers_1]
-    for r in range(header_row + 1, header_row + 20): 
-        rows_1.append([cell_val(r, c) for c in range(data_col_start, data_col_end + 1)])
-    result["Vertical Table"] = rows_1
+    data_cols = [2, 3, 4, 5, 9, 10]  # 观察上下文后写死的绝对列号
+    data_start_row = 6              # 观察上下文后写死的数据起始行
 
-    # ==== 示例 2: 处理 horizontal (横表) ====
-    # 假设 psa_hints 给出 start_row=15, start_col=1
-    h_start_row, h_start_col = 15, 1
-    header_col = h_start_col 
-    data_row_start, data_row_end = h_start_row, h_start_row + 5 
-    data_col_start, data_col_end = header_col + 1, header_col + 8 
+    table_1 = [headers_1]
+    r = data_start_row
+    while r <= ws.max_row:
+        # 使用关键列 (如第 2 列) 作为探针，若为空或遇到下一个表头则终止
+        if not cell_val(r, 2):
+            break
+        table_1.append([cell_val(r, c) for c in data_cols])
+        r += 1
+    result["Table 1 Name"] = table_1
 
-    headers_2 = [cell_val(r, header_col) for r in range(data_row_start, data_row_end + 1)]
-    rows_2 = [headers_2]
-    for c in range(data_col_start, data_col_end + 1):
-        rows_2.append([cell_val(r, c) for r in range(data_row_start, data_row_end + 1)])
-    result["Horizontal Table"] = rows_2
+    # ==== 示例 2: 横表的提取范式 ====
+    # 对于横表，_h() 函数向右读取：从第 c 列开始向右读取 depth 列
+    header_col = 3
+    headers_2 = [_h(10, c, depth=1) for c in [3, 4, 6, 9, 10]]  # 单级表头 depth=1
+    data_rows = [10, 11]     # 写死的绝对行号
+    data_start_col = 5       # 写死的数据起始列
 
-    # ==== 示例 3: 处理 cross (交叉表) ====
-    # 假设 psa_hints 给出 start_row=30, start_col=1
-    c_start_row, c_start_col = 30, 1
-    col_headers_row = c_start_row       # 上方的列表头
-    row_headers_col = c_start_col       # 左侧的行表头
-
-    data_row_start, data_row_end = c_start_row + 1, c_start_row + 5
-    data_col_start, data_col_end = c_start_col + 1, c_start_col + 5
-
-    # 交叉表通常需要展平 (Unpivot / Melt) 输出
-    headers_3 = ["Row_Dimension", "Col_Dimension", "Value"]
-    rows_3 = [headers_3]
-    for r in range(data_row_start, data_row_end + 1):
-        row_title = cell_val(r, row_headers_col)
-        for c in range(data_col_start, data_col_end + 1):
-            col_title = cell_val(col_headers_row, c)
-            val = cell_val(r, c)
-            if val: # 可选：只提取有值的交叉点
-                rows_3.append([row_title, col_title, val])
-    result["Cross Table"] = rows_3
+    table_2 = [headers_2]
+    c = data_start_col
+    while c <= ws.max_column:
+        if not cell_val(10, c): # 探针终止条件
+            break
+        table_2.append([cell_val(r, c) for r in data_rows])
+        c += 1
+    result["Table 2 Name"] = table_2
 
     return result
+```
 """
+
 def _get_llm() -> ChatOpenAI:
     from dotenv import load_dotenv
     for parent in Path(__file__).resolve().parents:
@@ -168,6 +159,7 @@ def code_gen_node(state: AgentState) -> dict:
                 "layout_type": entry.get("layout_type", "vertical"),
                 "start_row": entry.get("start_row"),
                 "start_col": entry.get("start_col"),
+                "header_map": entry.get("header_map", {}),  # ← 新增：PSA 识别的表头坐标信息
             }
 
     # 4. 极限压缩 Token 优化逻辑 _START_
@@ -236,5 +228,17 @@ def code_gen_node(state: AgentState) -> dict:
 
     response = _get_llm().invoke(messages)
     code     = _extract_code(response.content)
+
+    # ———————————————————————— DEBUG ——————————————————————————
+
+    # CONFIGURATION.yaml
+    # code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n\n    result = {}\n\n    headers_2g = [\"SYSTEM MODULE\", \"CELL\", \"RF MODULE||TYPE\", \"RF MODULE||QTY.\", \"ANTENNAS||NEW/SWAP/EXIST\", \"ANTENNAS||Antenna Type\"]\n    cols_2g = [2, 3, 4, 5, 9, 10]\n    data_start_row_2g = 6\n\n    table_2g = [headers_2g]\n    r = data_start_row_2g\n    while r <= ws.max_row:\n        if not cell_val(r, 2):\n            break\n        table_2g.append([cell_val(r, c) for c in cols_2g])\n        r += 1\n    result[\"2G Configuration\"] = table_2g\n\n    headers_3g = [\"SYSTEM MODULE\", \"CELL\", \"RF MODULE||TYPE\", \"RF MODULE||QTY.\", \"ANTENNAS||NEW/SWAP/EXIST\", \"ANTENNAS||Antenna Type\"]\n    cols_3g = [2, 3, 4, 5, 9, 10]\n    data_start_row_3g = 17\n\n    table_3g = [headers_3g]\n    r = data_start_row_3g\n    while r <= ws.max_row:\n        if not cell_val(r, 2):\n            break\n        table_3g.append([cell_val(r, c) for c in cols_3g])\n        r += 1\n    result[\"3G Configuration\"] = table_3g\n\n    headers_4g = [\"RF MODULE||QTY.\", \"ANTENNAS||NEW/SWAP/EXIST\", \"ANTENNAS||Antenna Type\"]\n    cols_4g = [5, 9, 10]\n    data_start_row_4g = 28\n\n    table_4g = [headers_4g]\n    r = data_start_row_4g\n    while r <= ws.max_row:\n        if not cell_val(r, 3):\n            break\n        table_4g.append([cell_val(r, c) for c in cols_4g])\n        r += 1\n    result[\"4G Configuration\"] = table_4g\n\n    headers_5g = [\"SYSTEM MODULE\", \"CELL\", \"RF MODULE||TYPE\"]\n    cols_5g = [2, 3, 4]\n    data_start_row_5g = 43\n\n    table_5g = [headers_5g]\n    r = data_start_row_5g\n    while r <= ws.max_row:\n        if not cell_val(r, 3):\n            break\n        table_5g.append([cell_val(r, c) for c in cols_5g])\n        r += 1\n    result[\"5G Configuration\"] = table_5g\n\n    return result"
+
+    # TSSR_senario_TEST.yaml
+    # code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n\n    def _h(r, c, depth=2):\n        parts = []\n        for i in range(depth):\n            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)\n            if v:\n                parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())\n        return '||'.join(parts) if parts else ''\n\n    result = {}\n\n    # 2G 1800 Mhz Existing Con./Mevcut Kon. - 表头在第 17 行，使用 _h 构建多级表头\n    t1_header_row = 17\n    t1_headers = [_h(t1_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 12, 17, 20, 37]]\n    t1_cols = [3, 4, 6, 9, 10, 12, 17, 20, 37]\n    t1_data = [t1_headers]\n    r = 19\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t1_data.append([cell_val(r, c) for c in t1_cols])\n        r += 1\n    result[\"2G 1800 Mhz Existing Con./Mevcut Kon.\"] = t1_data\n\n    # 3G 2100 Mhz Existing Con./Mevcut Kon. - 表头在第 26 行\n    t2_header_row = 26\n    t2_headers = [_h(t2_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]]\n    t2_cols = [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]\n    t2_data = [t2_headers]\n    r = 28\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t2_data.append([cell_val(r, c) for c in t2_cols])\n        r += 1\n    result[\"3G 2100 Mhz Existing Con./Mevcut Kon.\"] = t2_data\n\n    # L2600 Existing Con./Mevcut Kon. - 表头在第 71 行\n    t3_header_row = 71\n    t3_headers = [_h(t3_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 12, 17, 20, 22, 37]]\n    t3_cols = [3, 4, 6, 9, 10, 12, 17, 20, 22, 37]\n    t3_data = [t3_headers]\n    r = 73\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t3_data.append([cell_val(r, c) for c in t3_cols])\n        r += 1\n    result[\"L2600 Existing Con./Mevcut Kon.\"] = t3_data\n\n    # 3G 2100 Mhz Required Con./İstenen Kon. - 表头在第 103 行\n    t4_header_row = 103\n    t4_headers = [_h(t4_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 12, 17, 20, 37]]\n    t4_cols = [3, 4, 6, 9, 10, 12, 17, 20, 37]\n    t4_data = [t4_headers]\n    r = 105\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t4_data.append([cell_val(r, c) for c in t4_cols])\n        r += 1\n    result[\"3G 2100 Mhz Required Con./İstenen Kon.\"] = t4_data\n\n    # L2600 Required Con./İstenen Kon. - 表头在第 148 行\n    t5_header_row = 148\n    t5_headers = [_h(t5_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]]\n    t5_cols = [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]\n    t5_data = [t5_headers]\n    r = 150\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t5_data.append([cell_val(r, c) for c in t5_cols])\n        r += 1\n    result[\"L2600 Required Con./İstenen Kon.\"] = t5_data\n\n    return result"
+
+    # test_horizontal.yaml
+    # code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n\n    def _h(r, c, depth=2):\n        '''构建多级表头键 (如 '父||子')。\n        从第 r 行开始向下读取 depth 行，拼接非空单元格值。\n        用于处理 Excel 中垂直堆叠的多级表头结构。\n        '''\n        parts = []\n        for i in range(depth):\n            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)\n            if v:\n                parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())\n        return \"||\".join(parts) if parts else \"\"\n\n    result = {}\n\n    data_rows = [4, 5, 6, 7, 8]\n    data_start_col = 3\n\n    headers = [_h(r, 2, depth=1) for r in data_rows]\n\n    table_data = [headers]\n\n    c = data_start_col\n    while c <= ws.max_column:\n        if not cell_val(4, c):\n            break\n        col_data = [cell_val(r, c) for r in data_rows]\n        table_data.append(col_data)\n        c += 1\n\n    result[\"Server Node Configuration\"] = table_data\n\n    return result"
+
 
     return {"generated_code": code, "sandbox_error": None}

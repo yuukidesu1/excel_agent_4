@@ -81,9 +81,6 @@ class AgentState(TypedDict):
     # ── code_gen_node 输出 ───────────────────────────────────────────────
     generated_code: Optional[str]
 
-    # ── locate_node 输出──
-    header_map: Optional[Dict[str, Any]]
-
     # ── extract_node 输出──
     raw_data: Optional[List[List[Any]]]
 

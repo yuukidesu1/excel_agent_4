@@ -67,6 +67,10 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
 os.environ["LANGCHAIN_API_KEY"] = "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"
 
+# 调试开关：设置为 true 时跳过 structure_analyzer 和 cache_save 节点
+# 使用方法：DEBUG_SKIP_ANALYZER=true python main.py
+DEBUG_SKIP_ANALYZER = os.getenv("DEBUG_SKIP_ANALYZER", "false").lower() == "true"
+
 
 def _retry_node(state: AgentState) -> dict:
     return {"retry_count": state.get("retry_count", 0) + 1}
@@ -86,11 +90,16 @@ def _route_after_quality(state: AgentState) -> str:
         - 全量命中且跑完的 → 直接结束（没产生新代码，无需分析保存）
         - 有新产生代码的 + 质量达标 → structure_analyzer -> cache_save
         - 质量不达标 → retry
+        - DEBUG_SKIP_ANALYZER=true → 直接结束（调试用）
         """
     cache_state = state.get("cache", {})
 
     # 如果所有子表都命中了缓存，直接结束，不走后续的保存流
     if cache_state.get("all_cached", False):
+        return "end"
+
+    # 调试模式：跳过 structure_analyzer 和 cache_save，直接结束
+    if DEBUG_SKIP_ANALYZER:
         return "end"
 
     # 以下是有 LLM 新生成代码的情况

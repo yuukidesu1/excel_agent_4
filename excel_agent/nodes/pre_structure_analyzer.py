@@ -93,44 +93,65 @@ def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_co
     if direction == "col":
         for r in range(s_row, e_row + 1):
             found = []
+            seen_top_lefts = set()  # 用于去重同一合并单元格
+
             for c in range(s_col, e_col + 1):
                 path = _get_header_path(cell_map, merged_map, r, c, max_depth, "col")
                 if not path: continue
 
                 for th in norm_targets:
                     if path == th or path.startswith(th + "||"):
-                        m_info = merged_map.get((r, c), {"r_span": 1, "c_span": 1, "is_top_left": True})
-                        if m_info.get("is_top_left", True):
-                            found.append({
-                                "target": th,
-                                "rel_row": r - origin_r,
-                                "rel_col": c - origin_c,
-                                "row_span": m_info["r_span"],
-                                "col_span": m_info["c_span"]
-                            })
+                        m_info = merged_map.get((r, c), {"r_span": 1, "c_span": 1, "is_top_left": True, "top_left": (r, c)})
+                        top_left = m_info.get("top_left", (r, c))
+
+                        # 使用 top_left 去重，避免同一合并单元格被多次记录
+                        if top_left in seen_top_lefts:
+                            continue
+
+                        found.append({
+                            "target": th,
+                            "rel_row": r - origin_r,
+                            "rel_col": c - origin_c,
+                            "row_span": m_info["r_span"],
+                            "col_span": m_info["c_span"]
+                        })
+                        seen_top_lefts.add(top_left)
                         break
-            if found: return found
+            if found:
+                # 按列排序，确保表头顺序正确
+                found.sort(key=lambda x: x["rel_col"])
+                return found
 
     elif direction == "row":
         for c in range(s_col, e_col + 1):
             found = []
+            seen_top_lefts = set()  # 用于去重同一合并单元格
+
             for r in range(s_row, e_row + 1):
                 path = _get_header_path(cell_map, merged_map, r, c, max_depth, "row")
                 if not path: continue
 
                 for th in norm_targets:
                     if path == th or path.startswith(th + "||"):
-                        m_info = merged_map.get((r, c), {"r_span": 1, "c_span": 1, "is_top_left": True})
-                        if m_info.get("is_top_left", True):
-                            found.append({
-                                "target": th,
-                                "rel_row": r - origin_r,
-                                "rel_col": c - origin_c,
-                                "row_span": m_info["r_span"],
-                                "col_span": m_info["c_span"]
-                            })
+                        m_info = merged_map.get((r, c), {"r_span": 1, "c_span": 1, "is_top_left": True, "top_left": (r, c)})
+                        top_left = m_info.get("top_left", (r, c))
+
+                        # 使用 top_left 去重，避免同一合并单元格被多次记录
+                        if top_left in seen_top_lefts:
+                            continue
+
+                        found.append({
+                            "target": th,
+                            "rel_row": r - origin_r,
+                            "rel_col": c - origin_c,
+                            "row_span": m_info["r_span"],
+                            "col_span": m_info["c_span"]
+                        })
+                        seen_top_lefts.add(top_left)
                         break
-            if found: return found
+            if found:
+                found.sort(key=lambda x: x["rel_row"])
+                return found
 
     return []
 
@@ -280,7 +301,10 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
             "l2_row_offset": 0,
             "l2_col_offset": 0,
             "code": None,
-            "header_map": None,
+            "header_map": {  # 填入 PSA 识别的表头信息，供 code_gen 节点使用
+                "col_headers": col_h,  # List[Dict: {target, rel_row, rel_col, row_span, col_span}]
+                "row_headers": row_h,
+            },
             "extracted_data": None
         }
 
