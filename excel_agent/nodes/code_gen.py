@@ -211,13 +211,13 @@ def code_gen_node(state: AgentState) -> dict:
     if sandbox_error:
         ctx["last_code_error"] = sandbox_error
         ctx["retry_instruction"] = (
-            "🚨 上次生成的代码执行时出错，请仔细阅读上方错误信息修正代码！\n"
+            "上次生成的代码执行时出错，请仔细阅读上方错误信息修正代码！\n"
             "特别注意：请优先利用 psa_hints 提供的 start_row 和 start_col 进行坐标锚定，切忌写死绝对行号！"
         )
     elif errors:
         ctx["last_quality_errors"] = errors[-3:]
         ctx["retry_instruction"] = (
-            "🚨 上次代码执行成功但质量不达标，请根据质量报错修正代码。\n"
+            "上次代码执行成功但质量不达标，请根据质量报错修正代码。\n"
             "常见错误：如果是 horizontal 横表，返回的数组中可能行/列发生了颠倒，请参考代码模板中按列遍历的逻辑。"
         )
 

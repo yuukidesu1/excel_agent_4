@@ -241,53 +241,74 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
         # ── 3. 扫描目标表头提取特征 ──
         col_h = []
         row_h = []
+        kv_h = [] # KV 专用特征存储
 
-        if layout in ["仅列", "交叉"] and col_headers:
-            col_h = _scan_headers(
-                cell_map, merged_map,
-                # 🚨 修改这里：起始行从 sr + tr_span 改为 sr
-                # 这样即使标题在最左侧合并了多行，与其同行（右侧）的表头也不会被漏掉
-                sr, min(sr + tr_span + 15, max_row),
-                sc, max_col,
-                col_headers, "col", sr, sc
-            )
+        if layout == "kv":
+            # KV 模式下，在一个 Block 内自由寻找 Target Key 的相对位置
+            targets = row_headers or col_headers
+            for th in targets:
+                norm_th = _normalize_header(th)
+                found = False
+                # 扫描标题下下方 15 行，右侧的所有列
+                for r in range(sr, min(sr + 15, max_row + 1)):
+                    for c in range(sc, max_col + 1):
+                        val = cell_map.get((r, c))
+                        if val and _normalize_header(val) == norm_th:
+                            kv_h.append({
+                                "target": th,
+                                "rel_row": r -sr,
+                                "rel_col": c -sc,
+                            })
+                            found = True
+                            break
+                        if found: break
+        else:
+            if layout in ["仅列", "交叉"] and col_headers:
+                col_h = _scan_headers(
+                    cell_map, merged_map,
+                    # 🚨 修改这里：起始行从 sr + tr_span 改为 sr
+                    # 这样即使标题在最左侧合并了多行，与其同行（右侧）的表头也不会被漏掉
+                    sr, min(sr + tr_span + 15, max_row),
+                    sc, max_col,
+                    col_headers, "col", sr, sc
+                )
 
-        if layout in ["仅行", "交叉"] and row_headers:
-            row_h = _scan_headers(
-                cell_map, merged_map,
-                sr, max_row,  # 这里也同步放宽，从 sr 开始
-                # 🚨 修改这里：起始列从 sc 改为 sc
-                sc, min(sc + tr_span + 10, max_col),  # 适应行表头可能存在的偏移
-                row_headers, "row", sr, sc
-            )
-        # if layout in ["仅列", "交叉"] and col_headers:
-        #     col_h = _scan_headers(
-        #         cell_map, merged_map,
-        #         sr + tr_span, min(sr + tr_span + 10, max_row),
-        #         sc, max_col,
-        #         col_headers, "col", sr, sc
-        #     )
-        #
-        # if layout in ["仅行", "交叉"] and row_headers:
-        #     row_h = _scan_headers(
-        #         cell_map, merged_map,
-        #         sr + tr_span, max_row,
-        #         sc, min(sc + 5, max_col),
-        #         row_headers, "row", sr, sc
-        #     )
+            if layout in ["仅行", "交叉"] and row_headers:
+                row_h = _scan_headers(
+                    cell_map, merged_map,
+                    sr, max_row,  # 这里也同步放宽，从 sr 开始
+                    # 🚨 修改这里：起始列从 sc 改为 sc
+                    sc, min(sc + tr_span + 10, max_col),  # 适应行表头可能存在的偏移
+                    row_headers, "row", sr, sc
+                )
+
+
 
         # ── 4. 计算精准结构指纹 (Signature) ──
-        fingerprint_data = {
-            "title_pattern": norm_target_title,
-            "layout": layout,
-            "col_headers": sorted(col_h, key=lambda x: (x["rel_row"], x["rel_col"])),
-            "row_headers": sorted(row_h, key=lambda x: (x["rel_row"], x["rel_col"]))
-        }
+        if layout == "kv":
+            fingerprint_data = {
+                "title_pattern": norm_target_title,
+                "layout": layout,
+                "kv_headers": sorted(kv_h, key=lambda x: (x["rel_row"], x["rel_col"]))
+            }
+
+        else:
+            fingerprint_data = {
+                "title_pattern": norm_target_title,
+                "layout": layout,
+                "col_headers": sorted(col_h, key=lambda x: (x["rel_row"], x["rel_col"])),
+                "row_headers": sorted(row_h, key=lambda x: (x["rel_row"], x["rel_col"]))
+            }
 
         signature = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()[:16]
 
         # ── 5. 组装建档 ──
-        layout_en = "vertical" if layout == "仅列" else ("horizontal" if layout == "仅行" else "cross")
+        # layout_en = "vertical" if layout == "仅列" else ("horizontal" if layout == "仅行" else "cross")
+        layout_en = "vertical"
+        if layout == "仅行" : layout_en = "horizontal"
+        elif layout == "仅列" : layout_en = "vertical"
+        elif layout == "交叉" : layout_en = "cross"
+        elif layout == "kv" : layout_en = "kv"
 
         entries[target_title] = {
             "target_title": target_title,
