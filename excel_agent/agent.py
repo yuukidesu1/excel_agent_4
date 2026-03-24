@@ -51,6 +51,7 @@ from typing import Optional, List, Dict, Any, AsyncGenerator, Union
 
 from langgraph.graph import StateGraph, END
 
+from excel_agent.nodes.kv_code_gen import kv_code_gen_node
 from excel_agent.state import AgentState, SubtableConfig
 from excel_agent.nodes.parse import parse_node
 from excel_agent.nodes.pre_structure_analyzer import pre_structure_analyzer_node
@@ -125,6 +126,7 @@ def build_agent():
     g.add_node("structure_analyzer", structure_analyzer_node)
     g.add_node("cache_save", cache_save_node)
     g.add_node("retry", _retry_node)
+    g.add_node("kv_code_gen", kv_code_gen_node)
 
     # 2. 定义边 (数据流)
     g.set_entry_point("parse")
@@ -140,6 +142,8 @@ def build_agent():
     g.add_edge("code_gen", "sandbox")
     g.add_edge("sandbox", "restore")
     g.add_edge("restore", "quality")
+    g.add_edge("code_gen", "kv_code_gen")
+    g.add_edge("kv_code_gen", "sandbox")
 
     # 4. 质量控制路由：决定重试还是去切分保存代码
     g.add_conditional_edges("quality", _route_after_quality, {
@@ -206,23 +210,23 @@ def run_extraction(
     agent = build_agent()
 
     """可视化图"""
-    # from IPython.display import Image, display
-    #
-    # try:
-    #     display(Image(agent.get_graph().draw_mermaid_png()))
-    # except Exception:
-    #     pass
-    #
-    # import matplotlib.pyplot as plt
-    # import matplotlib.image as mpimg
-    # import io
-    #
-    # png_data = agent.get_graph().draw_mermaid_png()
-    # img = mpimg.imread(io.BytesIO(png_data))
-    # plt.figure(figsize=(15, 10), dpi=300)
-    # plt.imshow(img, interpolation='lanczos')  # 使用 lanczos 插值算法平滑边缘
-    # plt.axis('off')
-    # plt.show()
+    from IPython.display import Image, display
+
+    try:
+        display(Image(agent.get_graph().draw_mermaid_png()))
+    except Exception:
+        pass
+
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+    import io
+
+    png_data = agent.get_graph().draw_mermaid_png()
+    img = mpimg.imread(io.BytesIO(png_data))
+    plt.figure(figsize=(15, 10), dpi=300)
+    plt.imshow(img, interpolation='lanczos')  # 使用 lanczos 插值算法平滑边缘
+    plt.axis('off')
+    plt.show()
 
     final = agent.invoke(
         _make_initial(excel_path, sheet_name, subtable_titles, hints, subtable_configs)

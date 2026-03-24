@@ -2,7 +2,6 @@ import json
 import os
 import re
 from typing import Dict, Any, Optional
-from xmlrpc.client import Fault
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -69,7 +68,7 @@ def _get_llm() -> ChatOpenAI:
             break
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
-    model = os.getenv("OPENAI_MODEL")
+    model = os.getenv("OPENAI_MODEL", "GLM-4.7")
     if not api_key:
         raise ValueError("OpenAI API key is required")
     return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url)
@@ -108,7 +107,7 @@ def kv_code_gen_node(state: AgentState) -> dict:
         "sheet_structure": state["sheet_structure"]
     }
 
-    human_msg = f"请根据一下上下文编写 extract_kv 代码： \n```json\n{json.dumps(context, ensure_ascii=Fault, indent=2)}\n```"
+    human_msg = f"请根据一下上下文编写 extract_kv 代码： \n```json\n{json.dumps(context, ensure_ascii=False, indent=2)}\n```"
     messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human_msg)]
 
     response = _get_llm().invoke(messages)
