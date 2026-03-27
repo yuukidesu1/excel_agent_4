@@ -2,6 +2,7 @@ import json
 import os
 import re
 from typing import Dict, Any, Optional
+from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -68,7 +69,7 @@ def _get_llm() -> ChatOpenAI:
             break
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
-    model = os.getenv("OPENAI_MODEL", "GLM-4.7")
+    model = os.getenv("LLM_MODEL", "GLM-4.7")
     if not api_key:
         raise ValueError("OpenAI API key is required")
     return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url)
@@ -110,8 +111,11 @@ def kv_code_gen_node(state: AgentState) -> dict:
     human_msg = f"请根据一下上下文编写 extract_kv 代码： \n```json\n{json.dumps(context, ensure_ascii=False, indent=2)}\n```"
     messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human_msg)]
 
-    response = _get_llm().invoke(messages)
-    new_code = _extract_code(response.content)
+    # response = _get_llm().invoke(messages)
+    # new_code = _extract_code(response.content)
+
+    # —————————————————— DEBUG ——————————————————————————
+    new_code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n    result = {}\n    headers = [\"Site Power Supply\", \"Site Main Switch Breaker Size(In Site DB)\", \"Local Main Switch Breaker Siez(In Site DB)\", \"Generator on site\", \"Site Sharing Power\", \"VDC Main Switch Breaker Size(In Shelter DB)\", \"How Many Phases\", \"Smart Meter Detial\"]\n    val_coords = [(3, 9), (4, 9), (5, 9), (6, 9), (3, 20), (4, 20), (5, 20), (6, 20)]\n    row_data = [cell_val(r, c) for r, c in val_coords]\n    result[\"Power Supply\"] = [headers, row_data]\n    return result"
 
     # 追加至已有代码
     existing_code = state.get("generated_code", "")

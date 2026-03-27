@@ -82,7 +82,29 @@ def _route_after_cache(state: AgentState) -> str:
     cache_state = state.get("cache", {})
     if cache_state.get("all_cached", False):
         return "sandbox"
-    return "code_gen"
+
+    # 检查未命中子表的类型，决定走哪个 LLM 节点
+    missed = cache_state.get("missed_subtables", [])
+    entries = cache_state.get("entries", {})
+
+    has_kv = False
+    has_regular = False
+
+    for title in missed:
+        entry = entries.get(title, {})
+        layout = entry.get("layout_type", "vertical")
+        if layout == "kv":
+            has_kv = True
+        else:
+            has_regular = True
+
+    # 根据类型决定路由
+    if has_kv and has_regular:
+        return "code_gen"  # 混合情况，先走常规 code_gen，kv_code_gen 会并行处理
+    elif has_kv:
+        return "kv_code_gen"
+    else:
+        return "code_gen"
 
 
 def _route_after_quality(state: AgentState) -> str:
@@ -136,14 +158,14 @@ def build_agent():
     # 3. 缓存路由：决定是否调用 LLM
     g.add_conditional_edges("cache_query", _route_after_cache, {
         "sandbox": "sandbox",
-        "code_gen": "code_gen"
+        "code_gen": "code_gen",
+        "kv_code_gen": "kv_code_gen"
     })
 
     g.add_edge("code_gen", "sandbox")
+    g.add_edge("kv_code_gen", "sandbox")
     g.add_edge("sandbox", "restore")
     g.add_edge("restore", "quality")
-    g.add_edge("code_gen", "kv_code_gen")
-    g.add_edge("kv_code_gen", "sandbox")
 
     # 4. 质量控制路由：决定重试还是去切分保存代码
     g.add_conditional_edges("quality", _route_after_quality, {
@@ -210,23 +232,23 @@ def run_extraction(
     agent = build_agent()
 
     """可视化图"""
-    from IPython.display import Image, display
-
-    try:
-        display(Image(agent.get_graph().draw_mermaid_png()))
-    except Exception:
-        pass
-
-    import matplotlib.pyplot as plt
-    import matplotlib.image as mpimg
-    import io
-
-    png_data = agent.get_graph().draw_mermaid_png()
-    img = mpimg.imread(io.BytesIO(png_data))
-    plt.figure(figsize=(15, 10), dpi=300)
-    plt.imshow(img, interpolation='lanczos')  # 使用 lanczos 插值算法平滑边缘
-    plt.axis('off')
-    plt.show()
+    # from IPython.display import Image, display
+    #
+    # try:
+    #     display(Image(agent.get_graph().draw_mermaid_png()))
+    # except Exception:
+    #     pass
+    #
+    # import matplotlib.pyplot as plt
+    # import matplotlib.image as mpimg
+    # import io
+    #
+    # png_data = agent.get_graph().draw_mermaid_png()
+    # img = mpimg.imread(io.BytesIO(png_data))
+    # plt.figure(figsize=(15, 10), dpi=300)
+    # plt.imshow(img, interpolation='lanczos')  # 使用 lanczos 插值算法平滑边缘
+    # plt.axis('off')
+    # plt.show()
 
     final = agent.invoke(
         _make_initial(excel_path, sheet_name, subtable_titles, hints, subtable_configs)
