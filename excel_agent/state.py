@@ -6,9 +6,20 @@ state.py — 全局状态定义
     可选：target_columns  → 只保留指定列（None = 保留全部）
           hints           → 额外定位提示
 """
+import operator
+from typing import TypedDict, Optional, List, Dict, Any, Union, Tuple, Annotated
 
-from typing import TypedDict, Optional, List, Dict, Any, Union
 
+# 新增 Reducer 函数
+# def merge_code_string(a: Optional[str], b: Optional[str]) -> str:
+#     """
+#     用于合并并行节点生成的代码
+#     如果只有一方生成了代码，那就返回那一方的；
+#     如果两方都生成了，就把它们拼接成一个包含所有代码的长字符串
+#     """
+#     if not a: return b or ""
+#     if not b: return a
+#     return f"{a}\n\n# ====== 并行节点代码分隔线 ======\n\n{b}"
 
 class SubtableConfig(TypedDict, total=False):
     """
@@ -65,7 +76,8 @@ class CacheState(TypedDict):
     # 宏观调度
     all_cached: bool
     partial_cached: bool
-    missed_subtables: List[str]  # code_gen 节点现在的唯一输入源！
+    # missed_subtables: List[str]  # code_gen 节点现在的唯一输入源！
+    missed_subtables: Optional[List[Tuple[str, str]]]
 
     # 后置分析控制
     analyzer_skipped: bool
@@ -80,7 +92,8 @@ class AgentState(TypedDict):
     sheet_structure: Optional[Dict[str, Any]]
 
     # ── code_gen_node 输出 ───────────────────────────────────────────────
-    generated_code: Optional[str]
+    # generated_code: Optional[str]
+    generated_code: Annotated[List[str], operator.add]
 
     # ── extract_node 输出──
     raw_data: Optional[List[List[Any]]]
@@ -97,7 +110,8 @@ class AgentState(TypedDict):
     quality_score: float
     retry_count:   int
     errors:        List[str]
-    sandbox_error: Optional[str] # 代码执行异常信息，重试时传给 LLM
+    # 代码执行异常信息，重试时传给 LLM - 使用 Annotated 以支持并行节点更新
+    sandbox_error: Annotated[Optional[str], lambda a, b: b if b is not None else a]
 
     # ── 缓存系统 ───────────────────────────────────────────────
     cache: CacheState

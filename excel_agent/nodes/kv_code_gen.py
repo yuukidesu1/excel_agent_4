@@ -84,26 +84,26 @@ def _extract_code(raw: str) -> str:
 def kv_code_gen_node(state: AgentState) -> dict:
     missed = state.get("cache", {}).get("missed_subtables", [])
     if not missed:
-        return {}
+        return {"generated_code": []}
     # 只筛选 layout_type == "kv" 的表单
     psa_hints = {}
     valid_titles = []
     for title in missed:
-        entry = state["cache"]["entries"][title]
+        entry = state["cache"]["entries"][title[0]]
         if entry["layout_type"] == "kv":
-            psa_hints[title] = {
+            psa_hints[title[0]] = {
                 "layout_type": "kv",
                 "start_row": entry["start_row"],
                 "start_col": entry["start_col"]
             }
-            valid_titles.append(title)
+            valid_titles.append(title[0])
 
     if not valid_titles:
-        return {}
+        return {"generated_code": []}
 
     context = {
         "subtable_titles": valid_titles,
-        "subtable_configs": {t: state["config"]["subtable_configs"].get(t) for t in valid_titles},
+        "subtable_configs": {t[0]: state["config"]["subtable_configs"].get(t[0]) for t in valid_titles},
         "psa_hints": psa_hints,
         "sheet_structure": state["sheet_structure"]
     }
@@ -112,13 +112,42 @@ def kv_code_gen_node(state: AgentState) -> dict:
     messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human_msg)]
 
     # response = _get_llm().invoke(messages)
-    # new_code = _extract_code(response.content)
+    # kv_code = _extract_code(response.content)
 
     # —————————————————— DEBUG ——————————————————————————
-    new_code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n    result = {}\n    headers = [\"Site Power Supply\", \"Site Main Switch Breaker Size(In Site DB)\", \"Local Main Switch Breaker Siez(In Site DB)\", \"Generator on site\", \"Site Sharing Power\", \"VDC Main Switch Breaker Size(In Shelter DB)\", \"How Many Phases\", \"Smart Meter Detial\"]\n    val_coords = [(3, 9), (4, 9), (5, 9), (6, 9), (3, 20), (4, 20), (5, 20), (6, 20)]\n    row_data = [cell_val(r, c) for r, c in val_coords]\n    result[\"Power Supply\"] = [headers, row_data]\n    return result"
+    # 使用原始字符串确保 '\n' 被正确转义为两个字符而不是换行符
+    kv_code = r"""def extract(ws, merged_map: dict) -> dict:
+        def cell_val(r, c):
+            v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
+            if v is None: return ""
+            if isinstance(v, float) and v == int(v): return str(int(v))
+            return str(v).replace('\n', ' ').replace('\r', '').strip()
 
-    # 追加至已有代码
-    existing_code = state.get("generated_code", "")
-    final_code = existing_code + "\n\n" + new_code if existing_code else new_code
+        result = {}
 
-    return {"generated_code": final_code, "sandbox_error": None}
+        # ==== 处理子表：Spcae Available for New RF Antenna(m) ====
+        # 根据上下文分析，Keys 为 "Leg 1", "Leg 2", "Leg 3", "Leg 4"
+        headers_1 = ["Leg 1", "Leg 2", "Leg 3", "Leg 4"]
+
+        # 观察 sheet_structure 中的 Row 35:
+        # "Leg 1" 在 C35 (row 35, col 3), 其值 "32" 在 D35 (row 35, col 4)
+        # "Leg 2" 在 E35 (row 35, col 5), 其值 "22" 在 F35 (row 35, col 6)
+        # "Leg 3" 在 G35 (row 35, col 7), 其值 "22" 在 H35 (row 35, col 8)
+        # "Leg 4" 在 I35 (row 35, col 9), 其值 "NA" 在 J35 (row 35, col 10)
+        # 硬编码对应的 Value 坐标
+        val_coords = [
+            (35, 4), # D35
+            (35, 6), # F35
+            (35, 8), # H35
+            (35, 10) # J35
+        ]
+
+        row_data = []
+        for r, c in val_coords:
+            row_data.append(cell_val(r, c))
+
+        result["Spcae Available for New RF Antenna(m)"] = [headers_1, row_data]
+
+        return result"""
+
+    return {"generated_code": [kv_code], "sandbox_error": None}

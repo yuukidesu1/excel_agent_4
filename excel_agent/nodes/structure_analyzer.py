@@ -85,7 +85,8 @@ def structure_analyzer_node(state: AgentState) -> dict:
         return {"cache": cache_state}
 
     success_count = 0
-    for title in missed_subtables:
+    for raw_title in missed_subtables:
+        title = raw_title[0]
         if title not in entries:
             continue
 

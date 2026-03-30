@@ -77,7 +77,7 @@ def _retry_node(state: AgentState) -> dict:
     return {"retry_count": state.get("retry_count", 0) + 1}
 
 
-def _route_after_cache(state: AgentState) -> str:
+def _route_after_cache(state: AgentState) -> Union[str, List[str]]:
     """缓存查询后路由：全量命中→跳过LLM直接sandbox，部分/全未命中→code_gen"""
     cache_state = state.get("cache", {})
     if cache_state.get("all_cached", False):
@@ -91,7 +91,7 @@ def _route_after_cache(state: AgentState) -> str:
     has_regular = False
 
     for title in missed:
-        entry = entries.get(title, {})
+        entry = entries.get(title[0], {})
         layout = entry.get("layout_type", "vertical")
         if layout == "kv":
             has_kv = True
@@ -100,7 +100,7 @@ def _route_after_cache(state: AgentState) -> str:
 
     # 根据类型决定路由
     if has_kv and has_regular:
-        return "code_gen"  # 混合情况，先走常规 code_gen，kv_code_gen 会并行处理
+        return ["code_gen", "kv_code_gen"]  # 混合情况，先走常规 code_gen，kv_code_gen 会并行处理
     elif has_kv:
         return "kv_code_gen"
     else:
@@ -129,7 +129,7 @@ def _route_after_quality(state: AgentState) -> str:
     if state["quality_score"] >= QUALITY_THRESHOLD:
         return "analyze"
     if state.get("retry_count", 0) >= 3:
-        return "analyze"  # 超过重试上限，死马当活马医，保存备用
+        return "analyze"
     return "retry"
 
 
@@ -200,7 +200,7 @@ def _make_initial(
             "subtable_configs": subtable_configs,
         },
         "sheet_structure": None,
-        "generated_code": None,
+        "generated_code": [],
         "raw_result": None,
         "raw_data": None,
         "result": None,

@@ -38,7 +38,7 @@ def cache_query_node(state: AgentState) -> dict:
     for title, entry in entries.items():
         signature = entry.get("signature")
         if not signature:
-            missed_subtables.append(title)
+            missed_subtables.append((title, entry.get("layout_type")))
             continue
 
         # ── 1. 按子表独有特征查询缓存库 ──
@@ -84,7 +84,7 @@ def cache_query_node(state: AgentState) -> dict:
             # ── 5. 缓存未命中 ──
             entry["cache_hit"] = False
             entry["cache_level"] = "miss"
-            missed_subtables.append(title)
+            missed_subtables.append((title, entry.get("layout_type")))
             print(f"❌ 缓存未命中: 子表 '{title}'，将交由 LLM 生成代码。")
 
     # ── 6. 更新全局宏观调度标志 ──

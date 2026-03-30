@@ -140,39 +140,43 @@ def sandbox_node(state: AgentState) -> dict:
     # ==========================================================
     # ── 双轨执行 Track 2: 运行 LLM 新生成的代码 (针对 missed_subtables) ──
     # ==========================================================
-    new_code = state.get("generated_code", "")
-    missed_subtables = cache_state.get("missed_subtables", [])
+    # generated_code 是一个列表，需要合并所有片段
+    new_code_list = state.get("generated_code", [])
 
-    if new_code and missed_subtables:
-        namespace = {
-            "__builtins__": _SAFE_BUILTINS,
-            "re": re, "math": math, "json": json,
-            "sheet_structure": state.get("sheet_structure"),
-            "subtable_titles": missed_subtables,  # LLM 只需知道它该负责哪些表
-            "target_columns": target_configs,
-            "hints": hints,
-        }
+    for new_code in new_code_list:
 
-        try:
-            exec(compile(new_code, "<llm_generated>", "exec"), namespace)
-            extract_fn = namespace.get("extract")
+        missed_subtables = cache_state.get("missed_subtables", [])
 
-            if callable(extract_fn):
-                raw_llm = _run_with_timeout(lambda: extract_fn(ws, merged_map))
-                llm_dict = _validate_result(raw_llm)
+        if new_code and missed_subtables:
+            namespace = {
+                "__builtins__": _SAFE_BUILTINS,
+                "re": re, "math": math, "json": json,
+                "sheet_structure": state.get("sheet_structure"),
+                "subtable_titles": missed_subtables,  # LLM 只需知道它该负责哪些表
+                "target_columns": target_configs,
+                "hints": hints,
+            }
 
-                # 将 LLM 跑出来的数据合并到最终结果中
-                for title, data in llm_dict.items():
-                    final_raw_result[title] = data
-                    # 同步更新到 cache entries 里，准备给 SA 节点存库用
-                    if title in entries:
-                        entries[title]["extracted_data"] = data
-            else:
-                errors.append("新生成的代码中未找到 extract(ws, merged_map) 函数。")
-        except TimeoutError as e:
-            errors.append(f"新生成的代码执行超时: {str(e)}")
-        except Exception:
-            errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
+            try:
+                exec(compile(new_code, "<llm_generated>", "exec"), namespace)
+                extract_fn = namespace.get("extract")
+
+                if callable(extract_fn):
+                    raw_llm = _run_with_timeout(lambda: extract_fn(ws, merged_map))
+                    llm_dict = _validate_result(raw_llm)
+
+                    # 将 LLM 跑出来的数据合并到最终结果中
+                    for title, data in llm_dict.items():
+                        final_raw_result[title] = data
+                        # 同步更新到 cache entries 里，准备给 SA 节点存库用
+                        if title in entries:
+                            entries[title]["extracted_data"] = data
+                else:
+                    errors.append("新生成的代码中未找到 extract(ws, merged_map) 函数。")
+            except TimeoutError as e:
+                errors.append(f"新生成的代码执行超时: {str(e)}")
+            except Exception:
+                errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
 
 
     # ==========================================================
