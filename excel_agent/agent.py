@@ -66,7 +66,7 @@ from excel_agent.nodes.cache_save import cache_save_node
 # 开启 LangSmith 追踪
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
-os.environ["LANGCHAIN_API_KEY"] = "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"
+os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 
 # 调试开关：设置为 true 时跳过 structure_analyzer 和 cache_save 节点
 # 使用方法：DEBUG_SKIP_ANALYZER=true python main.py
@@ -122,8 +122,8 @@ def _route_after_quality(state: AgentState) -> str:
         return "end"
 
     # 调试模式：跳过 structure_analyzer 和 cache_save，直接结束
-    if DEBUG_SKIP_ANALYZER:
-        return "end"
+    # if DEBUG_SKIP_ANALYZER:
+    #     return "end"
 
     # 以下是有 LLM 新生成代码的情况
     if state["quality_score"] >= QUALITY_THRESHOLD:
@@ -133,6 +133,28 @@ def _route_after_quality(state: AgentState) -> str:
     return "retry"
 
 
+def _route_after_retry(state: AgentState) -> Union[str, List[str]]:
+    """重试后路由：根据 missed_subtables 的类型决定路由到 code_gen 和/或 kv_code_gen"""
+    cacte_state = state.get("cache", {})
+    missed = cacte_state.get("missed_subtables", [])
+    entries = cacte_state.get("entries", {})
+
+    has_kv = False
+    has_regular = False
+    for title in missed:
+        entry = entries.get(title[0], {})
+        layout = entry.get("layout_type", "vertical")
+        if layout == "kv":
+            has_kv = True
+        else:
+            has_regular = True
+
+    if has_kv and has_regular:
+        return ["code_gen", "kv_code_gen"]
+    elif has_kv:
+        return "kv_code_gen"
+    else:
+        return "code_gen"
 
 def build_agent():
     g = StateGraph(AgentState)
@@ -178,7 +200,12 @@ def build_agent():
     g.add_edge("cache_save", END)
 
     # 5. 重试逻辑：回到 code_gen 重新生成（针对未命中的子表）
-    g.add_edge("retry", "code_gen")
+    # g.add_edge("retry", "code_gen")
+    g.add_conditional_edges("retry", _route_after_retry, {
+        "retry": "retry",
+        "code_gen": "code_gen",
+        "kv_code_gen": "kv_code_gen"
+    })
 
     return g.compile()
 

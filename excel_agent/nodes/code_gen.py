@@ -212,8 +212,7 @@ def code_gen_node(state: AgentState) -> dict:
     if sandbox_error:
         ctx["last_code_error"] = sandbox_error
         ctx["retry_instruction"] = (
-            "上次生成的代码执行时出错，请仔细阅读上方错误信息修正代码！\n"
-            "特别注意：请优先利用 psa_hints 提供的 start_row 和 start_col 进行坐标锚定，切忌写死绝对行号！"
+            "上次生成的代码执行时出错，请仔细阅读上方错误信息修正代码！"
         )
     elif errors:
         ctx["last_quality_errors"] = errors[-3:]
@@ -227,8 +226,8 @@ def code_gen_node(state: AgentState) -> dict:
         HumanMessage(content=json.dumps(ctx, ensure_ascii=False, indent=2)),
     ]
 
-    # response = _get_llm().invoke(messages)
-    # code     = _extract_code(response.content)
+    response = _get_llm().invoke(messages)
+    code     = _extract_code(response.content)
 
     # ———————————————————————— DEBUG ——————————————————————————
 
@@ -243,91 +242,91 @@ def code_gen_node(state: AgentState) -> dict:
 
     # TEST_WL_56A0DS6_mix.yaml
     # 使用原始字符串确保 '\n' 被正确转义为两个字符而不是换行符
-    code = r"""def extract(ws, merged_map: dict) -> dict:
-    def cell_val(r, c):
-        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
-        if v is None: return ""
-        if isinstance(v, float) and v == int(v): return str(int(v))
-        return str(v).replace('\n', ' ').replace('\r', '').strip()
-
-    def _h(r, c, depth=2):
-        '''构建多级表头键 (如 '父||子')。
-        从第 r 行开始向下读取 depth 行，拼接非空单元格值。
-        用于处理 Excel 中垂直堆叠的多级表头结构。
-        '''
-        parts = []
-        for i in range(depth):
-            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
-            if v:
-                parts.append(str(v).replace('\n', ' ').replace('\r', '').strip())
-        return "||".join(parts) if parts else ""
-
-    result = {}
-
-    header_row_1 = 4
-    data_start_row_1 = 5
-    cols_1 = [3, 4, 5, 6]
-
-    table_1 = []
-    table_1.append([cell_val(header_row_1, c) for c in cols_1])
-
-    r = data_start_row_1
-    while r <= ws.max_row:
-        key_val = cell_val(r, 3)
-        if not key_val or key_val.startswith("Group"):
-            break
-        table_1.append([cell_val(r, c) for c in cols_1])
-        r += 1
-    result["Group 1 Wireless Antenna"] = table_1
-
-    header_row_2 = 12
-    data_start_row_2 = 13
-    cols_2 = [3, 4, 5, 6]
-
-    table_2 = []
-    table_2.append([cell_val(header_row_2, c) for c in cols_2])
-
-    r = data_start_row_2
-    while r <= ws.max_row:
-        key_val = cell_val(r, 3)
-        if not key_val or key_val.startswith("Group"):
-            break
-        table_2.append([cell_val(r, c) for c in cols_2])
-        r += 1
-    result["Group 2 Wireless Antenna"] = table_2
-
-    header_row_3 = 20
-    data_start_row_3 = 21
-    cols_3 = [3, 4, 5, 6]
-
-    table_3 = []
-    table_3.append([cell_val(header_row_3, c) for c in cols_3])
-
-    r = data_start_row_3
-    while r <= ws.max_row:
-        key_val = cell_val(r, 3)
-        if not key_val or key_val.startswith("Group"):
-            break
-        table_3.append([cell_val(r, c) for c in cols_3])
-        r += 1
-    result["Group 3 Wireless Antenna"] = table_3
-
-    header_row_4 = 28
-    data_start_row_4 = 29
-    cols_4 = [3, 4, 5, 6]
-
-    table_4 = []
-    table_4.append([cell_val(header_row_4, c) for c in cols_4])
-
-    r = data_start_row_4
-    while r <= ws.max_row:
-        key_val = cell_val(r, 3)
-        if not key_val or key_val.startswith("Group") or key_val.startswith("Spcae"):
-            break
-        table_4.append([cell_val(r, c) for c in cols_4])
-        r += 1
-    result["Group 4 Wireless Antenna"] = table_4
-
-    return result"""
+    # code = r"""def extract(ws, merged_map: dict) -> dict:
+    # def cell_val(r, c):
+    #     v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
+    #     if v is None: return ""
+    #     if isinstance(v, float) and v == int(v): return str(int(v))
+    #     return str(v).replace('\n', ' ').replace('\r', '').strip()
+    #
+    # def _h(r, c, depth=2):
+    #     '''构建多级表头键 (如 '父||子')。
+    #     从第 r 行开始向下读取 depth 行，拼接非空单元格值。
+    #     用于处理 Excel 中垂直堆叠的多级表头结构。
+    #     '''
+    #     parts = []
+    #     for i in range(depth):
+    #         v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
+    #         if v:
+    #             parts.append(str(v).replace('\n', ' ').replace('\r', '').strip())
+    #     return "||".join(parts) if parts else ""
+    #
+    # result = {}
+    #
+    # header_row_1 = 4
+    # data_start_row_1 = 5
+    # cols_1 = [3, 4, 5, 6]
+    #
+    # table_1 = []
+    # table_1.append([cell_val(header_row_1, c) for c in cols_1])
+    #
+    # r = data_start_row_1
+    # while r <= ws.max_row:
+    #     key_val = cell_val(r, 3)
+    #     if not key_val or key_val.startswith("Group"):
+    #         break
+    #     table_1.append([cell_val(r, c) for c in cols_1])
+    #     r += 1
+    # result["Group 1 Wireless Antenna"] = table_1
+    #
+    # header_row_2 = 12
+    # data_start_row_2 = 13
+    # cols_2 = [3, 4, 5, 6]
+    #
+    # table_2 = []
+    # table_2.append([cell_val(header_row_2, c) for c in cols_2])
+    #
+    # r = data_start_row_2
+    # while r <= ws.max_row:
+    #     key_val = cell_val(r, 3)
+    #     if not key_val or key_val.startswith("Group"):
+    #         break
+    #     table_2.append([cell_val(r, c) for c in cols_2])
+    #     r += 1
+    # result["Group 2 Wireless Antenna"] = table_2
+    #
+    # header_row_3 = 20
+    # data_start_row_3 = 21
+    # cols_3 = [3, 4, 5, 6]
+    #
+    # table_3 = []
+    # table_3.append([cell_val(header_row_3, c) for c in cols_3])
+    #
+    # r = data_start_row_3
+    # while r <= ws.max_row:
+    #     key_val = cell_val(r, 3)
+    #     if not key_val or key_val.startswith("Group"):
+    #         break
+    #     table_3.append([cell_val(r, c) for c in cols_3])
+    #     r += 1
+    # result["Group 3 Wireless Antenna"] = table_3
+    #
+    # header_row_4 = 28
+    # data_start_row_4 = 29
+    # cols_4 = [3, 4, 5, 6]
+    #
+    # table_4 = []
+    # table_4.append([cell_val(header_row_4, c) for c in cols_4])
+    #
+    # r = data_start_row_4
+    # while r <= ws.max_row:
+    #     key_val = cell_val(r, 3)
+    #     if not key_val or key_val.startswith("Group") or key_val.startswith("Spcae"):
+    #         break
+    #     table_4.append([cell_val(r, c) for c in cols_4])
+    #     r += 1
+    # result["Group 4 Wireless Antenna"] = table_4
+    #
+    # return result"""
 
     return {"generated_code": [code], "sandbox_error": None}

@@ -32,7 +32,7 @@ _SYSTEM_PROMPT = """\
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【代码骨架
 ```Python
-def extract_kv(ws, merged_map: dict) -> dict:
+def extract(ws, merged_map: dict) -> dict:
     def cell_val(r, c):
         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
         if v is None: return ""
@@ -111,43 +111,43 @@ def kv_code_gen_node(state: AgentState) -> dict:
     human_msg = f"请根据一下上下文编写 extract_kv 代码： \n```json\n{json.dumps(context, ensure_ascii=False, indent=2)}\n```"
     messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human_msg)]
 
-    # response = _get_llm().invoke(messages)
-    # kv_code = _extract_code(response.content)
+    response = _get_llm().invoke(messages)
+    kv_code = _extract_code(response.content)
 
     # —————————————————— DEBUG ——————————————————————————
     # 使用原始字符串确保 '\n' 被正确转义为两个字符而不是换行符
-    kv_code = r"""def extract(ws, merged_map: dict) -> dict:
-        def cell_val(r, c):
-            v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
-            if v is None: return ""
-            if isinstance(v, float) and v == int(v): return str(int(v))
-            return str(v).replace('\n', ' ').replace('\r', '').strip()
-
-        result = {}
-
-        # ==== 处理子表：Spcae Available for New RF Antenna(m) ====
-        # 根据上下文分析，Keys 为 "Leg 1", "Leg 2", "Leg 3", "Leg 4"
-        headers_1 = ["Leg 1", "Leg 2", "Leg 3", "Leg 4"]
-
-        # 观察 sheet_structure 中的 Row 35:
-        # "Leg 1" 在 C35 (row 35, col 3), 其值 "32" 在 D35 (row 35, col 4)
-        # "Leg 2" 在 E35 (row 35, col 5), 其值 "22" 在 F35 (row 35, col 6)
-        # "Leg 3" 在 G35 (row 35, col 7), 其值 "22" 在 H35 (row 35, col 8)
-        # "Leg 4" 在 I35 (row 35, col 9), 其值 "NA" 在 J35 (row 35, col 10)
-        # 硬编码对应的 Value 坐标
-        val_coords = [
-            (35, 4), # D35
-            (35, 6), # F35
-            (35, 8), # H35
-            (35, 10) # J35
-        ]
-
-        row_data = []
-        for r, c in val_coords:
-            row_data.append(cell_val(r, c))
-
-        result["Spcae Available for New RF Antenna(m)"] = [headers_1, row_data]
-
-        return result"""
+    # kv_code = r"""def extract(ws, merged_map: dict) -> dict:
+    #     def cell_val(r, c):
+    #         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
+    #         if v is None: return ""
+    #         if isinstance(v, float) and v == int(v): return str(int(v))
+    #         return str(v).replace('\n', ' ').replace('\r', '').strip()
+    #
+    #     result = {}
+    #
+    #     # ==== 处理子表：Spcae Available for New RF Antenna(m) ====
+    #     # 根据上下文分析，Keys 为 "Leg 1", "Leg 2", "Leg 3", "Leg 4"
+    #     headers_1 = ["Leg 1", "Leg 2", "Leg 3", "Leg 4"]
+    #
+    #     # 观察 sheet_structure 中的 Row 35:
+    #     # "Leg 1" 在 C35 (row 35, col 3), 其值 "32" 在 D35 (row 35, col 4)
+    #     # "Leg 2" 在 E35 (row 35, col 5), 其值 "22" 在 F35 (row 35, col 6)
+    #     # "Leg 3" 在 G35 (row 35, col 7), 其值 "22" 在 H35 (row 35, col 8)
+    #     # "Leg 4" 在 I35 (row 35, col 9), 其值 "NA" 在 J35 (row 35, col 10)
+    #     # 硬编码对应的 Value 坐标
+    #     val_coords = [
+    #         (35, 4), # D35
+    #         (35, 6), # F35
+    #         (35, 8), # H35
+    #         (35, 10) # J35
+    #     ]
+    #
+    #     row_data = []
+    #     for r, c in val_coords:
+    #         row_data.append(cell_val(r, c))
+    #
+    #     result["Spcae Available for New RF Antenna(m)"] = [headers_1, row_data]
+    #
+    #     return result"""
 
     return {"generated_code": [kv_code], "sandbox_error": None}
