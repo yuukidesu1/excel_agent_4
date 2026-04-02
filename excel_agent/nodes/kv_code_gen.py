@@ -81,6 +81,50 @@ def _extract_code(raw: str) -> str:
     return raw.strip()
 
 
+def _compress_structure_for_kv(st: dict, kv_titles: list, psa_hints: dict) -> dict:
+    """
+    为 KV 表抽取压缩 sheet_structure，只保留相关区域的单元格信息
+    """
+    # KV 表通常需要标题周围一个小范围的数据
+    # 计算每个 KV 表的相关行范围 (标题行 ±20 行)
+    target_rows = set()
+    target_cols = set()
+
+    for title in kv_titles:
+        hint = psa_hints.get(title, {})
+        start_row = hint.get("start_row", 1)
+        start_col = hint.get("start_col", 1)
+
+        # KV 表通常比较紧凑，搜索标题下方 25 行，左右各 15 列的范围
+        for r in range(max(1, start_row - 2), min(start_row + 25, st.get("max_row", 1000) + 1)):
+            target_rows.add(r)
+        for c in range(max(1, start_col - 2), min(start_col + 15, st.get("max_col", 50) + 1)):
+            target_cols.add(c)
+
+    # 压缩单元格表示：R{row}C{col}:{value}
+    compressed_cells = [
+        f"R{c['row']}C{c['col']}:{c['value']}"
+        for c in st.get("non_empty_cells", [])
+        if c["row"] in target_rows and c["col"] in target_cols
+    ][:300]  # 最多 300 个单元格
+
+    # 压缩合并单元格表示：R{min_row}C{min_col}~R{max_row}C{max_col}:{value}
+    compressed_merges = [
+        f"R{m['min_row']}C{m['min_col']}~R{m['max_row']}C{m['max_col']}:{m['value']}"
+        for m in st.get("merged_cells_info", [])
+        if (m["min_row"] in target_rows or m["max_row"] in target_rows) and
+           (m["min_col"] in target_cols or m["max_col"] in target_cols)
+    ][:50]  # 最多 50 个合并单元格
+
+    return {
+        "sheet_name": st.get("sheet_name", ""),
+        "max_row": st.get("max_row", 1000),
+        "max_col": st.get("max_col", 50),
+        "sample_cells": compressed_cells,
+        "merged_cells_info": compressed_merges
+    }
+
+
 def kv_code_gen_node(state: AgentState) -> dict:
     missed = state.get("cache", {}).get("missed_subtables", [])
     if not missed:
@@ -101,11 +145,15 @@ def kv_code_gen_node(state: AgentState) -> dict:
     if not valid_titles:
         return {"generated_code": []}
 
+    # ★ 极限压缩 Token 优化逻辑
+    st = state["sheet_structure"]
+    compressed_structure = _compress_structure_for_kv(st, valid_titles, psa_hints)
+
     context = {
         "subtable_titles": valid_titles,
-        "subtable_configs": {t[0]: state["config"]["subtable_configs"].get(t[0]) for t in valid_titles},
+        "subtable_configs": {t: state["config"]["subtable_configs"].get(t) for t in valid_titles},
         "psa_hints": psa_hints,
-        "sheet_structure": state["sheet_structure"]
+        "sheet_structure": compressed_structure  # 使用压缩后的结构
     }
 
     human_msg = f"请根据一下上下文编写 extract_kv 代码： \n```json\n{json.dumps(context, ensure_ascii=False, indent=2)}\n```"

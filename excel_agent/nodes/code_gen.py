@@ -233,100 +233,69 @@ def code_gen_node(state: AgentState) -> dict:
 
     # CONFIGURATION.yaml
     # code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n\n    result = {}\n\n    headers_2g = [\"SYSTEM MODULE\", \"CELL\", \"RF MODULE||TYPE\", \"RF MODULE||QTY.\", \"ANTENNAS||NEW/SWAP/EXIST\", \"ANTENNAS||Antenna Type\"]\n    cols_2g = [2, 3, 4, 5, 9, 10]\n    data_start_row_2g = 6\n\n    table_2g = [headers_2g]\n    r = data_start_row_2g\n    while r <= ws.max_row:\n        if not cell_val(r, 2):\n            break\n        table_2g.append([cell_val(r, c) for c in cols_2g])\n        r += 1\n    result[\"2G Configuration\"] = table_2g\n\n    headers_3g = [\"SYSTEM MODULE\", \"CELL\", \"RF MODULE||TYPE\", \"RF MODULE||QTY.\", \"ANTENNAS||NEW/SWAP/EXIST\", \"ANTENNAS||Antenna Type\"]\n    cols_3g = [2, 3, 4, 5, 9, 10]\n    data_start_row_3g = 17\n\n    table_3g = [headers_3g]\n    r = data_start_row_3g\n    while r <= ws.max_row:\n        if not cell_val(r, 2):\n            break\n        table_3g.append([cell_val(r, c) for c in cols_3g])\n        r += 1\n    result[\"3G Configuration\"] = table_3g\n\n    headers_4g = [\"RF MODULE||QTY.\", \"ANTENNAS||NEW/SWAP/EXIST\", \"ANTENNAS||Antenna Type\"]\n    cols_4g = [5, 9, 10]\n    data_start_row_4g = 28\n\n    table_4g = [headers_4g]\n    r = data_start_row_4g\n    while r <= ws.max_row:\n        if not cell_val(r, 3):\n            break\n        table_4g.append([cell_val(r, c) for c in cols_4g])\n        r += 1\n    result[\"4G Configuration\"] = table_4g\n\n    headers_5g = [\"SYSTEM MODULE\", \"CELL\", \"RF MODULE||TYPE\"]\n    cols_5g = [2, 3, 4]\n    data_start_row_5g = 43\n\n    table_5g = [headers_5g]\n    r = data_start_row_5g\n    while r <= ws.max_row:\n        if not cell_val(r, 3):\n            break\n        table_5g.append([cell_val(r, c) for c in cols_5g])\n        r += 1\n    result[\"5G Configuration\"] = table_5g\n\n    return result"
-
+    #
     # TSSR_senario_TEST.yaml
     # code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n\n    def _h(r, c, depth=2):\n        parts = []\n        for i in range(depth):\n            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)\n            if v:\n                parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())\n        return '||'.join(parts) if parts else ''\n\n    result = {}\n\n    # 2G 1800 Mhz Existing Con./Mevcut Kon. - 表头在第 17 行，使用 _h 构建多级表头\n    t1_header_row = 17\n    t1_headers = [_h(t1_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 12, 17, 20, 37]]\n    t1_cols = [3, 4, 6, 9, 10, 12, 17, 20, 37]\n    t1_data = [t1_headers]\n    r = 19\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t1_data.append([cell_val(r, c) for c in t1_cols])\n        r += 1\n    result[\"2G 1800 Mhz Existing Con./Mevcut Kon.\"] = t1_data\n\n    # 3G 2100 Mhz Existing Con./Mevcut Kon. - 表头在第 26 行\n    t2_header_row = 26\n    t2_headers = [_h(t2_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]]\n    t2_cols = [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]\n    t2_data = [t2_headers]\n    r = 28\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t2_data.append([cell_val(r, c) for c in t2_cols])\n        r += 1\n    result[\"3G 2100 Mhz Existing Con./Mevcut Kon.\"] = t2_data\n\n    # L2600 Existing Con./Mevcut Kon. - 表头在第 71 行\n    t3_header_row = 71\n    t3_headers = [_h(t3_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 12, 17, 20, 22, 37]]\n    t3_cols = [3, 4, 6, 9, 10, 12, 17, 20, 22, 37]\n    t3_data = [t3_headers]\n    r = 73\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t3_data.append([cell_val(r, c) for c in t3_cols])\n        r += 1\n    result[\"L2600 Existing Con./Mevcut Kon.\"] = t3_data\n\n    # 3G 2100 Mhz Required Con./İstenen Kon. - 表头在第 103 行\n    t4_header_row = 103\n    t4_headers = [_h(t4_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 12, 17, 20, 37]]\n    t4_cols = [3, 4, 6, 9, 10, 12, 17, 20, 37]\n    t4_data = [t4_headers]\n    r = 105\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t4_data.append([cell_val(r, c) for c in t4_cols])\n        r += 1\n    result[\"3G 2100 Mhz Required Con./İstenen Kon.\"] = t4_data\n\n    # L2600 Required Con./İstenen Kon. - 表头在第 148 行\n    t5_header_row = 148\n    t5_headers = [_h(t5_header_row, c, depth=2) for c in [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]]\n    t5_cols = [3, 4, 6, 9, 10, 11, 12, 13, 16, 17, 20, 37]\n    t5_data = [t5_headers]\n    r = 150\n    while r <= ws.max_row:\n        if not cell_val(r, 3): break\n        t5_data.append([cell_val(r, c) for c in t5_cols])\n        r += 1\n    result[\"L2600 Required Con./İstenen Kon.\"] = t5_data\n\n    return result"
-
+    #
     # test_horizontal.yaml
     # code = "def extract(ws, merged_map: dict) -> dict:\n    def cell_val(r, c):\n        v = merged_map.get((r, c), ws.cell(row=r, column=c).value)\n        if v is None: return \"\"\n        if isinstance(v, float) and v == int(v): return str(int(v))\n        return str(v).replace('\\n', ' ').replace('\\r', '').strip()\n\n    def _h(r, c, depth=2):\n        '''构建多级表头键 (如 '父||子')。\n        从第 r 行开始向下读取 depth 行，拼接非空单元格值。\n        用于处理 Excel 中垂直堆叠的多级表头结构。\n        '''\n        parts = []\n        for i in range(depth):\n            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)\n            if v:\n                parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())\n        return \"||\".join(parts) if parts else \"\"\n\n    result = {}\n\n    data_rows = [4, 5, 6, 7, 8]\n    data_start_col = 3\n\n    headers = [_h(r, 2, depth=1) for r in data_rows]\n\n    table_data = [headers]\n\n    c = data_start_col\n    while c <= ws.max_column:\n        if not cell_val(4, c):\n            break\n        col_data = [cell_val(r, c) for r in data_rows]\n        table_data.append(col_data)\n        c += 1\n\n    result[\"Server Node Configuration\"] = table_data\n\n    return result"
-
+    #
     # TEST_WL_56A0DS6_mix.yaml
     # 使用原始字符串确保 '\n' 被正确转义为两个字符而不是换行符
-    # code = r"""def extract(ws, merged_map: dict) -> dict:
-    # def cell_val(r, c):
-    #     v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
-    #     if v is None: return ""
-    #     if isinstance(v, float) and v == int(v): return str(int(v))
-    #     return str(v).replace('\n', ' ').replace('\r', '').strip()
-    #
-    # def _h(r, c, depth=2):
-    #     '''构建多级表头键 (如 '父||子')。
-    #     从第 r 行开始向下读取 depth 行，拼接非空单元格值。
-    #     用于处理 Excel 中垂直堆叠的多级表头结构。
-    #     '''
-    #     parts = []
-    #     for i in range(depth):
-    #         v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
-    #         if v:
-    #             parts.append(str(v).replace('\n', ' ').replace('\r', '').strip())
-    #     return "||".join(parts) if parts else ""
-    #
-    # result = {}
-    #
-    # header_row_1 = 4
-    # data_start_row_1 = 5
-    # cols_1 = [3, 4, 5, 6]
-    #
-    # table_1 = []
-    # table_1.append([cell_val(header_row_1, c) for c in cols_1])
-    #
-    # r = data_start_row_1
-    # while r <= ws.max_row:
-    #     key_val = cell_val(r, 3)
-    #     if not key_val or key_val.startswith("Group"):
-    #         break
-    #     table_1.append([cell_val(r, c) for c in cols_1])
-    #     r += 1
-    # result["Group 1 Wireless Antenna"] = table_1
-    #
-    # header_row_2 = 12
-    # data_start_row_2 = 13
-    # cols_2 = [3, 4, 5, 6]
-    #
-    # table_2 = []
-    # table_2.append([cell_val(header_row_2, c) for c in cols_2])
-    #
-    # r = data_start_row_2
-    # while r <= ws.max_row:
-    #     key_val = cell_val(r, 3)
-    #     if not key_val or key_val.startswith("Group"):
-    #         break
-    #     table_2.append([cell_val(r, c) for c in cols_2])
-    #     r += 1
-    # result["Group 2 Wireless Antenna"] = table_2
-    #
-    # header_row_3 = 20
-    # data_start_row_3 = 21
-    # cols_3 = [3, 4, 5, 6]
-    #
-    # table_3 = []
-    # table_3.append([cell_val(header_row_3, c) for c in cols_3])
-    #
-    # r = data_start_row_3
-    # while r <= ws.max_row:
-    #     key_val = cell_val(r, 3)
-    #     if not key_val or key_val.startswith("Group"):
-    #         break
-    #     table_3.append([cell_val(r, c) for c in cols_3])
-    #     r += 1
-    # result["Group 3 Wireless Antenna"] = table_3
-    #
-    # header_row_4 = 28
-    # data_start_row_4 = 29
-    # cols_4 = [3, 4, 5, 6]
-    #
-    # table_4 = []
-    # table_4.append([cell_val(header_row_4, c) for c in cols_4])
-    #
-    # r = data_start_row_4
-    # while r <= ws.max_row:
-    #     key_val = cell_val(r, 3)
-    #     if not key_val or key_val.startswith("Group") or key_val.startswith("Spcae"):
-    #         break
-    #     table_4.append([cell_val(r, c) for c in cols_4])
-    #     r += 1
-    # result["Group 4 Wireless Antenna"] = table_4
-    #
-    # return result"""
+#     code = """def extract(ws, merged_map: dict) -> dict:
+#     def cell_val(r, c):
+#         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
+#         if v is None: return ""
+#         if isinstance(v, float) and v == int(v): return str(int(v))
+#         return str(v).replace('\\n', ' ').replace('\\r', '').strip()
+#
+#     def _h(r, c, depth=2):
+#         '''构建多级表头键 (如 '父||子')。
+#         从第 r 行开始向下读取 depth 行，拼接非空单元格值。
+#         用于处理 Excel 中垂直堆叠的多级表头结构。
+#         '''
+#         parts = []
+#         for i in range(depth):
+#             v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
+#             if v:
+#                 parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())
+#         return "||".join(parts) if parts else ""
+#
+#     result = {}
+#
+#     # ==== 表格 1: 1. DCDU 14B Load Information ====
+#     # 布局类型：Horizontal (横向表头，纵向数据)
+#     # 观察：第 3 行为列标题行，第 4-7 行为数据行
+#
+#     # 第 3 行：表头行
+#     # 列范围：1 到 14 (R3C1 到 R3C14)
+#     # 注意：R3C13~R3C14 为合并单元格 "Distance to Power cabinet"
+#     headers_1 = []
+#     for c in range(1, 15):
+#         headers_1.append(cell_val(3, c))
+#
+#     table_1 = [headers_1]
+#
+#     # 数据起始行：4
+#     data_start_row = 4
+#     r = data_start_row
+#     while r <= ws.max_row:
+#         # 探针：检测第 1 列 (Row Header 列)
+#         # 如果为空，或者遇到下一个小节标题 (如 "2. Apple Power System")，则终止
+#         key_val = cell_val(r, 1)
+#         if not key_val:
+#             break
+#         if key_val.startswith("2. "):
+#             break
+#
+#         # 提取整行数据 (列 1 到 14)
+#         row_data = [cell_val(r, c) for c in range(1, 15)]
+#         table_1.append(row_data)
+#         r += 1
+#
+#     result["1. DCDU 14B Load Information"] = table_1
+#
+#     return result
+# """
 
     return {"generated_code": [code], "sandbox_error": None}

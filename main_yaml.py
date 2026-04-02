@@ -105,6 +105,7 @@ if __name__ == "__main__":
         # default="./configs/generalization_test/MW_56A0DS6.yaml",
         # default="./configs/generalization_test/WL_56A0DS6.yaml",
         # default="./configs/test/test_horizontal.yaml",
+        # default="./configs/generalization_test/56A0DS6_PowerLoadInformation.yaml",
         # default="./configs/generalization_test/Power_56A0NNC.yaml",
         # default="./configs/test/test_cross.yaml",
         default="./configs/test/TEST_WL_56A0DS6_mix.yaml",
