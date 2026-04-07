@@ -3,3 +3,8 @@ langchain-openai>=0.1.0
 langchain-core>=0.2.0
 openpyxl>=3.1.0
 python-dotenv>=1.0.0
+
+# Gradio Web Application
+gradio>=4.0.0
+pandas>=2.0.0
+pygments>=2.15.0

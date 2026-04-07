@@ -89,18 +89,37 @@ def extract(ws, merged_map: dict) -> dict:
         r += 1
     result["Table 1 Name"] = table_1
 
-    # ==== 示例 2: 横表的提取范式 ====
-    # 对于横表，_h() 函数向右读取：从第 c 列开始向右读取 depth 列
-    header_col = 3
-    headers_2 = [_h(10, c, depth=1) for c in [3, 4, 6, 9, 10]]  # 单级表头 depth=1
-    data_rows = [10, 11]     # 写死的绝对行号
-    data_start_col = 5       # 写死的数据起始列
+    # ==== 示例 2: 横表 ("仅行"布局) 的提取范式 ====
+    # 布局特征：表头在左侧纵向排列（第 1 列），数据向右延伸
+    # 提取策略：将横表当作普通二维网格提取，第 0 行为表头，后续每行为数据
+    #
+    # 示例 Excel 结构：
+    #   R10C1="Header A"  R10C2="Val1"  R10C3="Val2" ...
+    #   R11C1="Header B"  R11C2="Data1" R11C3="Data2" ...
+    #
+    # 正确提取结果（返回格式）：
+    #   [
+    #     ["Header A", "Header B"],      # 第 0 行：表头（从第 1 列读取）
+    #     ["Val1", "Data1"],             # 第 1 行：数据列 1
+    #     ["Val2", "Data2"],             # 第 2 行：数据列 2
+    #     ...
+    #   ]
+    #
+    # 代码范式：
+    header_col = 3    # 表头所在的列（绝对坐标）
+    data_rows = [10, 11]     # 表头所在的行号列表（绝对坐标）
+    data_start_col = 5       # 数据起始列（绝对坐标）
+
+    # 从第 1 列（或指定列）垂直读取表头
+    headers_2 = [cell_val(r, header_col) for r in data_rows]
 
     table_2 = [headers_2]
     c = data_start_col
     while c <= ws.max_column:
-        if not cell_val(10, c): # 探针终止条件
+        # 探针：检查第一行表头在当前列是否有值
+        if not cell_val(data_rows[0], c):
             break
+        # 提取当前列的所有行数据，作为结果的一行
         table_2.append([cell_val(r, c) for r in data_rows])
         c += 1
     result["Table 2 Name"] = table_2
@@ -243,11 +262,12 @@ def code_gen_node(state: AgentState) -> dict:
     # TEST_WL_56A0DS6_mix.yaml
     # 使用原始字符串确保 '\n' 被正确转义为两个字符而不是换行符
 #     code = """def extract(ws, merged_map: dict) -> dict:
+# def extract(ws, merged_map: dict) -> dict:
 #     def cell_val(r, c):
 #         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
 #         if v is None: return ""
 #         if isinstance(v, float) and v == int(v): return str(int(v))
-#         return str(v).replace('\\n', ' ').replace('\\r', '').strip()
+#         return str(v).replace('\n', ' ').replace('\r', '').strip()
 #
 #     def _h(r, c, depth=2):
 #         '''构建多级表头键 (如 '父||子')。
@@ -258,42 +278,43 @@ def code_gen_node(state: AgentState) -> dict:
 #         for i in range(depth):
 #             v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
 #             if v:
-#                 parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())
+#                 parts.append(str(v).replace('\n', ' ').replace('\r', '').strip())
 #         return "||".join(parts) if parts else ""
 #
 #     result = {}
 #
-#     # ==== 表格 1: 1. DCDU 14B Load Information ====
-#     # 布局类型：Horizontal (横向表头，纵向数据)
-#     # 观察：第 3 行为列标题行，第 4-7 行为数据行
+#     # ==== 1. DCDU 14B Load Information ====
+#     # 布局特征：Horizontal (仅行布局)
+#     # 结构分析：
+#     # - 第 1 列为行表头列 (Row Headers)，包含 "DCDU 14B Load Information" 和 "Fuse Capacity"
+#     # - 第 3 行和第 4 行为数据行所在行
+#     # - 数据从第 2 列开始向右延伸 (Load 0 ~ Load 9, Location, Distance...)
 #
-#     # 第 3 行：表头行
-#     # 列范围：1 到 14 (R3C1 到 R3C14)
-#     # 注意：R3C13~R3C14 为合并单元格 "Distance to Power cabinet"
-#     headers_1 = []
-#     for c in range(1, 15):
-#         headers_1.append(cell_val(3, c))
+#     table_name = "1. DCDU 14B Load Information"
 #
-#     table_1 = [headers_1]
+#     # 绝对坐标配置
+#     header_col = 1  # 行表头所在的列
+#     data_rows = [3, 4]  # 行表头所在的行号 (DCDU 14B... 在 R3, Fuse Capacity 在 R4)
+#     data_start_col = 2  # 数据起始列 (紧接行表头列之后)
 #
-#     # 数据起始行：4
-#     data_start_row = 4
-#     r = data_start_row
-#     while r <= ws.max_row:
-#         # 探针：检测第 1 列 (Row Header 列)
-#         # 如果为空，或者遇到下一个小节标题 (如 "2. Apple Power System")，则终止
-#         key_val = cell_val(r, 1)
-#         if not key_val:
+#     # 第 0 行：构建表头 (从第 1 列垂直读取)
+#     headers = [cell_val(r, header_col) for r in data_rows]
+#
+#     table_data = [headers]
+#
+#     # 循环提取每一列的数据，直到表头行 (R3) 为空
+#     c = data_start_col
+#     while c <= ws.max_column:
+#         # 探针：检查第一行表头 (data_rows[0], 即 R3) 在当前列是否有值
+#         if not cell_val(data_rows[0], c):
 #             break
-#         if key_val.startswith("2. "):
-#             break
 #
-#         # 提取整行数据 (列 1 到 14)
-#         row_data = [cell_val(r, c) for c in range(1, 15)]
-#         table_1.append(row_data)
-#         r += 1
+#         # 提取当前列的所有行数据，作为结果的一行
+#         row_data = [cell_val(r, c) for r in data_rows]
+#         table_data.append(row_data)
+#         c += 1
 #
-#     result["1. DCDU 14B Load Information"] = table_1
+#     result[table_name] = table_data
 #
 #     return result
 # """
