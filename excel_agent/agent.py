@@ -51,7 +51,6 @@ from typing import Optional, List, Dict, Any, AsyncGenerator, Union
 
 from langgraph.graph import StateGraph, END
 
-from excel_agent.nodes.kv_code_gen import kv_code_gen_node
 from excel_agent.state import AgentState, SubtableConfig
 from excel_agent.nodes.parse import parse_node
 from excel_agent.nodes.pre_structure_analyzer import pre_structure_analyzer_node
@@ -93,16 +92,16 @@ def _route_after_cache(state: AgentState) -> Union[str, List[str]]:
     for title in missed:
         entry = entries.get(title[0], {})
         layout = entry.get("layout_type", "vertical")
-        if layout == "kv":
+        if layout == "kv_table":
             has_kv = True
         else:
             has_regular = True
 
     # 根据类型决定路由
     if has_kv and has_regular:
-        return ["code_gen", "kv_code_gen"]  # 混合情况，先走常规 code_gen，kv_code_gen 会并行处理
+        return ["code_gen", "kv_table_code_gen"]  # 混合情况，先走常规 code_gen，kv_table_code_gen 会并行处理
     elif has_kv:
-        return "kv_code_gen"
+        return "kv_table_code_gen"
     else:
         return "code_gen"
 
@@ -133,28 +132,7 @@ def _route_after_quality(state: AgentState) -> str:
     return "retry"
 
 
-def _route_after_retry(state: AgentState) -> Union[str, List[str]]:
-    """重试后路由：根据 missed_subtables 的类型决定路由到 code_gen 和/或 kv_code_gen"""
-    cacte_state = state.get("cache", {})
-    missed = cacte_state.get("missed_subtables", [])
-    entries = cacte_state.get("entries", {})
 
-    has_kv = False
-    has_regular = False
-    for title in missed:
-        entry = entries.get(title[0], {})
-        layout = entry.get("layout_type", "vertical")
-        if layout == "kv":
-            has_kv = True
-        else:
-            has_regular = True
-
-    if has_kv and has_regular:
-        return ["code_gen", "kv_code_gen"]
-    elif has_kv:
-        return "kv_code_gen"
-    else:
-        return "code_gen"
 
 def build_agent():
     g = StateGraph(AgentState)
@@ -170,7 +148,6 @@ def build_agent():
     g.add_node("structure_analyzer", structure_analyzer_node)
     g.add_node("cache_save", cache_save_node)
     g.add_node("retry", _retry_node)
-    g.add_node("kv_code_gen", kv_code_gen_node)
 
     # 2. 定义边 (数据流)
     g.set_entry_point("parse")
@@ -180,12 +157,10 @@ def build_agent():
     # 3. 缓存路由：决定是否调用 LLM
     g.add_conditional_edges("cache_query", _route_after_cache, {
         "sandbox": "sandbox",
-        "code_gen": "code_gen",
-        "kv_code_gen": "kv_code_gen"
+        "code_gen": "code_gen"
     })
 
     g.add_edge("code_gen", "sandbox")
-    g.add_edge("kv_code_gen", "sandbox")
     g.add_edge("sandbox", "restore")
     g.add_edge("restore", "quality")
 
@@ -200,12 +175,7 @@ def build_agent():
     g.add_edge("cache_save", END)
 
     # 5. 重试逻辑：回到 code_gen 重新生成（针对未命中的子表）
-    # g.add_edge("retry", "code_gen")
-    g.add_conditional_edges("retry", _route_after_retry, {
-        "retry": "retry",
-        "code_gen": "code_gen",
-        "kv_code_gen": "kv_code_gen"
-    })
+    g.add_edge("retry", "code_gen")
 
     return g.compile()
 

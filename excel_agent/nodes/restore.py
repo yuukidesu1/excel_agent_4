@@ -126,52 +126,6 @@ def restore_node(state: AgentState) -> dict:
         formatted = [[_fmt(cell) for cell in row] for row in table_data]
         formatted_result[title] = formatted
 
-    # ── 新增：混合表类型边界过滤 ──
-    # 当存在 kv 表和普通表混合时，需要防止普通表向下穿透到 kv 表区域
-    if subtable_titles and sheet_structure:
-        # 获取所有子表的配置信息（如果有）
-        target_configs_dict = config.get("subtable_configs") or config.get("target_columns") or {}
-
-        # 找出所有 kv 表的位置（根据配置或 cache_state 中的 layout_type 判断）
-        kv_table_positions = []
-        for title in subtable_titles:
-            tc_def = target_configs_dict.get(title, {})
-            layout_type = tc_def.get("layout") if isinstance(tc_def, dict) else None
-
-            # 也检查 cache_state 中的 layout_type
-            cache_entry = cache_state.get("entries", {}).get(title, {})
-            cache_layout = cache_entry.get("layout_type")
-
-            if layout_type == "kv" or cache_layout == "kv":
-                # 尝试从 cache_state 中获取 kv 表的 start_row
-                kv_start_row = cache_entry.get("start_row")
-                if kv_start_row:
-                    kv_table_positions.append({
-                        "title": title,
-                        "start_row": kv_start_row
-                    })
-
-        # 如果有 kv 表，检查前面的普通表是否穿透了
-        if kv_table_positions:
-            for kv_pos in kv_table_positions:
-                kv_start_row = kv_pos["start_row"]
-                kv_title = kv_pos["title"]
-
-                # 找到 kv 表前面的那个子表
-                kv_index = subtable_titles.index(kv_title)
-                if kv_index > 0:
-                    prev_title = subtable_titles[kv_index - 1]
-                    if prev_title in formatted_result and formatted_result[prev_title]:
-                        # 检查 prev_title 的抽取代码中记录的 start_row
-                        prev_entry = cache_state.get("entries", {}).get(prev_title, {})
-                        prev_start_row = prev_entry.get("start_row", 0)
-
-                        # 计算 prev_title 最多能占多少行（到 kv 表之前的行数）
-                        max_allowed_rows = kv_start_row - prev_start_row - 1  # -1 是给标题行留的空间
-
-                        # 如果 prev_title 的抽取结果超过了这个行数，截断它
-                        if len(formatted_result[prev_title]) > max_allowed_rows:
-                            formatted_result[prev_title] = formatted_result[prev_title][:max_allowed_rows]
 
     # ── 第 2 步：方法一 - 相邻子表值过滤 ──
     # 检查每个子表（除了最后一个）的最后一行是否等于下一个子表的标题
@@ -252,7 +206,7 @@ def restore_node(state: AgentState) -> dict:
         if isinstance(current_targets_raw, dict):
             # 如果是新版配置字典，根据 layout 提取对应的 headers
             layout = current_targets_raw.get("layout", "仅列")
-            if layout in ["仅行", "kv"]:
+            if layout in ["仅行", "kv_table"]:
                 current_targets = current_targets_raw.get("row_headers", [])
             else:
                 current_targets = current_targets_raw.get("col_headers", [])

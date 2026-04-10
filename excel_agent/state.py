@@ -25,7 +25,7 @@ class SubtableConfig(TypedDict, total=False):
     """
     单个子表的详细抽取配置
     """
-    layout: str     # “仅行” ｜ “仅列” ｜ “交叉” | “kv”
+    layout: str     # “仅行” ｜ “仅列” ｜ “交叉” | “kv_table”
     col_headers: List[str]
     row_headers: List[str]
     keys: List[str]

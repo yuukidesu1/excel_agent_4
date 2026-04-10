@@ -162,7 +162,7 @@ def code_gen_node(state: AgentState) -> dict:
     # 1. 优先获取 missed_subtables
     cache_state = state.get("cache", {})
     # subtable_titles = cache_state.get("missed_subtables")
-    subtable_titles = [ms[0] for ms in cache_state.get("missed_subtables") if ms[1] != "kv"]
+    subtable_titles = [ms[0] for ms in cache_state.get("missed_subtables") if ms[1] != "kv_table"]
     if subtable_titles is None:
         subtable_titles = config.get("subtable_titles", [])
 
