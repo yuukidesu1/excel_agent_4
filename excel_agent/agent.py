@@ -62,10 +62,11 @@ from excel_agent.nodes.structure_analyzer import structure_analyzer_node
 from excel_agent.nodes.cache_query import cache_query_node
 from excel_agent.nodes.cache_save import cache_save_node
 
-# 开启 LangSmith 追踪
-# os.environ["LANGCHAIN_TRACING_V2"] = "true"
-# os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
-# os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+# 开启 LangSmith 追踪（API Key 通过环境变量配置）
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
+if "LANGCHAIN_API_KEY" not in os.environ:
+    print("Warning: LANGCHAIN_API_KEY not set, LangSmith tracing disabled")
 
 # 调试开关：设置为 true 时跳过 structure_analyzer 和 cache_save 节点
 # 使用方法：DEBUG_SKIP_ANALYZER=true python main.py
