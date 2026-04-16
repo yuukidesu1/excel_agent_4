@@ -175,10 +175,15 @@ def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_co
 # ==================== 3. 主流程 ====================
 
 def pre_structure_analyzer_node(state: AgentState) -> dict:
-    """PSA 主节点逻辑"""
+    """PSA 主节点逻辑（当前暂不涉及 KV 模式）"""
     config = state.get("config", {})
-    subtable_titles = config.get("subtable_titles", [])
 
+    # KV 模式直接跳过 PSA 分析，KV 缓存不依赖 subtable_title 建档
+    extract_type = config.get("extract_type", "table")
+    if extract_type and extract_type.lower() == "kv":
+        return {"cache": state.get("cache", {})}
+
+    subtable_titles = config.get("subtable_titles", [])
     st = state.get("sheet_structure", {})
 
     # 初始化 CacheState
@@ -223,8 +228,7 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
         sr, sc = sub_info["start_row"], sub_info["start_col"]
         tr_span = sub_info["title_row_span"]
 
-        # ── 2. 解析用户配置的布局和目标字段 ──
-        layout = "仅列"  # 默认纵表
+        # ── 2. 解析用户配置的目标字段（不再依赖 layout 配置） ──
         col_headers = []
         row_headers = []
 
@@ -232,13 +236,11 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
         target_configs_dict = config.get("subtable_configs") or config.get("target_columns") or {}
         tc_def = target_configs_dict.get(target_title)
 
-        if isinstance(tc_def, dict) and ("layout" in tc_def or "col_headers" in tc_def):
-            layout = tc_def.get("layout", "仅列")
+        if isinstance(tc_def, dict):
             col_headers = tc_def.get("col_headers", [])
             row_headers = tc_def.get("row_headers", [])
         elif isinstance(tc_def, list):
             # 旧版的 parent/child YAML 列表结构
-            layout = "仅列"
             for item in tc_def:
                 if isinstance(item, dict):
                     if "name" in item:
@@ -254,28 +256,31 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
                 else:
                     col_headers.append(str(item))
 
-        # ── 3. 扫描目标表头提取特征 ──
+        # ── 3. 扫描目标表头提取特征（不预设 layout，全部扫描） ──
         col_h = []
         row_h = []
 
-        if layout in ["仅列", "交叉"] and col_headers:
+        # 同时扫描列表头和行表头
+        if col_headers:
             col_h = _scan_headers(
                 cell_map, merged_map,
-                # 🚨 修改这里：起始行从 sr + tr_span 改为 sr
-                # 这样即使标题在最左侧合并了多行，与其同行（右侧）的表头也不会被漏掉
                 sr, min(sr + tr_span + 15, max_row),
                 sc, max_col,
                 col_headers, "col", sr, sc
             )
 
-        if layout in ["仅行", "交叉"] and row_headers:
+        if row_headers:
             row_h = _scan_headers(
                 cell_map, merged_map,
-                sr, max_row,  # 这里也同步放宽，从 sr 开始
-                # 🚨 修改这里：起始列从 sc 改为 sc
-                sc, min(sc + tr_span + 10, max_col),  # 适应行表头可能存在的偏移
+                sr, max_row,
+                sc, min(sc + tr_span + 10, max_col),
                 row_headers, "row", sr, sc
             )
+
+        # ── 3.5 自动判断布局类型 ──
+        # 优先使用扫描到的表头信息，算法判断 layout
+        all_found_headers = col_h + row_h
+        layout = _detect_layout(all_found_headers)
 
 
 

@@ -1,5 +1,5 @@
 """
-agent.py — LangGraph 图组装 + 对外入口（支持三级缓存）
+agent.py — LangGraph 图组装 + 对外入口（支持三级缓存 + KV 模式）
 
 流程（带缓存）：
 
@@ -36,12 +36,43 @@ agent.py — LangGraph 图组装 + 对外入口（支持三级缓存）
       ↓
   END ✅
 
-  相似结构文件（L2 命中）：
-  由于 L2 需要 structure_fingerprint，而该指纹需要 code_gen 后才能生成，
-  因此 L2 缓存暂时不支持跨文件复用。
+  KV 模式流程：
+  第一次运行（无缓存）：
+  parse_node
+      ↓
+  cache_query_node (KV 查询) → 未命中
+      ↓
+  kv_code_gen_node [LLM] → 生成 KV 抽取代码
+      ↓
+  kv_sandbox_node [KV 模式] → 执行 extract(ws, merged_map, kv_list)
+      ↓
+  kv_quality_node → 空间置信度打分
+      ↓
+      ├──────────────┐
+      │              │
+      v              v
+┌────────────┐  ┌──────────────┐
+│ 分数 >= 90% │  │ 分数 < 90%   │
+└───────┬────┘  └───────┬──────┘
+        │               │
+        │ Yes           │ No
+        │               │
+        v               v
+┌───────────────┐  ┌────────────────────┐
+│ kv_cache_save │  │ retry (max=3)      │
+│               │  │ 或人工介入反馈     │
+└───────────────┘  └────────────────────┘
 
-  【未来优化】：可以在 parse 后立即计算一个轻量级结构指纹用于 L2 查询，
-  而不依赖 structure_analyzer 的详细分析。
+  KV 模式后续运行（L1/L2 命中）：
+  parse_node
+      ↓
+  cache_query_node (KV 查询) → 命中
+      ↓
+  kv_sandbox_node [直接使用缓存代码]
+      ↓
+  kv_quality_node
+      ↓
+  END ✅ (跳过 kv_cache_save，避免重复保存)
 """
 
 import sys
@@ -62,11 +93,13 @@ from excel_agent.nodes.structure_analyzer import structure_analyzer_node
 from excel_agent.nodes.cache_query import cache_query_node
 from excel_agent.nodes.cache_save import cache_save_node
 
-# 开启 LangSmith 追踪（API Key 通过环境变量配置）
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
-if "LANGCHAIN_API_KEY" not in os.environ:
-    print("Warning: LANGCHAIN_API_KEY not set, LangSmith tracing disabled")
+# KV 模式节点
+from excel_agent.nodes.kv_code_gen import kv_code_gen_node
+from excel_agent.nodes.kv_quality import kv_quality_node, route_after_kv_quality, QUALITY_THRESHOLD as KV_QUALITY_THRESHOLD
+from excel_agent.nodes.kv_cache_save import kv_cache_save_node
+from excel_agent.nodes.kv_sandbox import kv_sandbox_node
+
+
 
 # 调试开关：设置为 true 时跳过 structure_analyzer 和 cache_save 节点
 # 使用方法：DEBUG_SKIP_ANALYZER=true python main.py
@@ -77,9 +110,31 @@ def _retry_node(state: AgentState) -> dict:
     return {"retry_count": state.get("retry_count", 0) + 1}
 
 
-def _route_after_cache(state: AgentState) -> Union[str, List[str]]:
-    """缓存查询后路由：全量命中→跳过LLM直接sandbox，部分/全未命中→code_gen"""
+def _route_after_retry(state: AgentState) -> str:
+    """重试后路由：根据抽取类型决定回到哪个代码生成节点"""
+    config = state.get("config", {})
+    extract_type = config.get("extract_type", "table")
+
+    if extract_type == "kv":
+        return "kv_code_gen"
+    return "code_gen"
+
+
+def _route_after_cache(state: AgentState) -> str:
+    """缓存查询后路由：根据缓存命中情况决定"""
+    config = state.get("config", {})
+    extract_type = config.get("extract_type", "table")
     cache_state = state.get("cache", {})
+
+    # KV 模式：根据缓存命中情况决定
+    if extract_type and extract_type.lower() == "kv":
+        # KV 缓存命中：直接走 sandbox 执行缓存代码
+        if cache_state.get("hit", False) and not cache_state.get("missed", True):
+            return "kv_sandbox"
+        # KV 缓存未命中：走 LLM 生成代码
+        return "kv_code_gen"
+
+    # 表格模式：根据缓存命中情况决定
     if cache_state.get("all_cached", False):
         return "sandbox"
 
@@ -109,7 +164,7 @@ def _route_after_cache(state: AgentState) -> Union[str, List[str]]:
 
 def _route_after_quality(state: AgentState) -> str:
     """
-        质量检查后路由：
+        质量检查后路由（表格模式）：
         - 全量命中且跑完的 → 直接结束（没产生新代码，无需分析保存）
         - 有新产生代码的 + 质量达标 → structure_analyzer -> cache_save
         - 质量不达标 → retry
@@ -133,12 +188,32 @@ def _route_after_quality(state: AgentState) -> str:
     return "retry"
 
 
+def _route_after_kv_quality(state: AgentState) -> str:
+    """KV 质量检查后路由"""
+    quality_score = state.get("quality_score", 0.0)
+    retry_count = state.get("retry_count", 0)
+    cache_state = state.get("cache", {})
+
+    # 如果使用的是缓存代码（缓存命中），无需重复保存，直接结束
+    if cache_state.get("hit", False) and not cache_state.get("missed", True):
+        return "end"
+
+    # 质量达标，进入缓存保存
+    if quality_score >= KV_QUALITY_THRESHOLD:
+        return "save"
+
+    # 超过最大重试次数，强制结束（人工介入）
+    if retry_count >= 3:
+        return "human"
+
+    # 质量不达标，重试
+    return "retry"
 
 
 def build_agent():
     g = StateGraph(AgentState)
 
-    # 1. 注册所有节点
+    # 1. 注册所有节点（表格模式）
     g.add_node("parse", parse_node)
     g.add_node("pre_structure_analyzer", pre_structure_analyzer_node)
     g.add_node("cache_query", cache_query_node)
@@ -150,15 +225,23 @@ def build_agent():
     g.add_node("cache_save", cache_save_node)
     g.add_node("retry", _retry_node)
 
+    # 注册 KV 模式节点
+    g.add_node("kv_code_gen", kv_code_gen_node)
+    g.add_node("kv_sandbox", kv_sandbox_node)
+    g.add_node("kv_quality", kv_quality_node)
+    g.add_node("kv_cache_save", kv_cache_save_node)
+
     # 2. 定义边 (数据流)
     g.set_entry_point("parse")
     g.add_edge("parse", "pre_structure_analyzer")
     g.add_edge("pre_structure_analyzer", "cache_query")
 
-    # 3. 缓存路由：决定是否调用 LLM
+    # 3. 缓存查询后路由：根据抽取类型和缓存命中情况决定
     g.add_conditional_edges("cache_query", _route_after_cache, {
         "sandbox": "sandbox",
-        "code_gen": "code_gen"
+        "code_gen": "code_gen",
+        "kv_code_gen": "kv_code_gen",
+        "kv_sandbox": "kv_sandbox"
     })
 
     g.add_edge("code_gen", "sandbox")
@@ -175,8 +258,25 @@ def build_agent():
     g.add_edge("structure_analyzer", "cache_save")
     g.add_edge("cache_save", END)
 
-    # 5. 重试逻辑：回到 code_gen 重新生成（针对未命中的子表）
-    g.add_edge("retry", "code_gen")
+    # KV 模式边
+    g.add_edge("kv_code_gen", "kv_sandbox")
+    g.add_edge("kv_sandbox", "kv_quality")
+
+    # KV 质量路由
+    g.add_conditional_edges("kv_quality", _route_after_kv_quality, {
+        "save": "kv_cache_save",
+        "retry": "retry",
+        "human": END,  # 人工介入
+        "end": END
+    })
+
+    g.add_edge("kv_cache_save", END)
+
+    # 重试逻辑：根据抽取类型路由回对应的代码生成节点
+    g.add_conditional_edges("retry", _route_after_retry, {
+        "code_gen": "code_gen",
+        "kv_code_gen": "kv_code_gen"
+    })
 
     return g.compile()
 
@@ -186,8 +286,9 @@ def _make_initial(
     sheet_name: str,
     subtable_titles: List[str],
     hints: Optional[str],
-    # target_columns: Optional[Dict[str, List[Dict[str, Any]]]],
-    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]]
+    extract_type: str = "table",
+    kv_list: Optional[List[str]] = None,
+    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]] = None
 ) -> AgentState:
     return {
         "config": {
@@ -196,11 +297,14 @@ def _make_initial(
             "subtable_titles": subtable_titles,
             "hints": hints,
             "subtable_configs": subtable_configs,
+            "extract_type": extract_type,
+            "kv_list": kv_list or [],
         },
         "sheet_structure": None,
         "generated_code": [],
         "raw_result": None,
         "raw_data": None,
+        "kv_result": None,
         "result": None,
         "final_output": None,
         "quality_score": 0.0,
@@ -224,8 +328,18 @@ def run_extraction(
     sheet_name: str,
     subtable_titles: List[str],
     hints: Optional[str] = None,
-    # target_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]] = None) -> dict:
+    extract_type: str = "table",
+    kv_list: Optional[List[str]] = None,
+    subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]] = None
+) -> dict:
+    """
+    统一抽取入口（支持表格模式和 KV 模式）
+
+    Args:
+        extract_type: "table" | "kv"
+        kv_list: KV 模式下的 Key 列表
+    """
+
 
     agent = build_agent()
 
@@ -249,9 +363,27 @@ def run_extraction(
     # plt.show()
 
     final = agent.invoke(
-        _make_initial(excel_path, sheet_name, subtable_titles, hints, subtable_configs)
+        _make_initial(
+            excel_path, sheet_name, subtable_titles, hints,
+            extract_type=extract_type,
+            kv_list=kv_list,
+            subtable_configs=subtable_configs
+        )
     )
 
+    # KV 模式返回
+    if extract_type == "kv":
+        return {
+            "success": final["quality_score"] >= KV_QUALITY_THRESHOLD,
+            "data": final.get("kv_result"),
+            "quality_score": final["quality_score"],
+            "retry_count": final["retry_count"],
+            "errors": final["errors"],
+            "generated_code": final.get("generated_code", ""),
+            "sandbox_error": final.get("sandbox_error"),
+        }
+
+    # 表格模式返回
     return {
         "success": final["quality_score"] >= QUALITY_THRESHOLD,
         "data": final.get("final_output") or final.get("result"),
@@ -278,7 +410,7 @@ async def run_extraction_deep_stream(
     捕获 Token 吐字、节点完成事件。
     """
     agent = build_agent()
-    initial = _make_initial(excel_path, sheet_name, subtable_titles, hints, target_columns)
+    initial = _make_initial(excel_path, sheet_name, subtable_titles, hints)
 
     async for event in agent.astream_events(initial, version="v2"):
         kind = event["event"]
@@ -291,7 +423,8 @@ async def run_extraction_deep_stream(
 
         elif kind == "on_chain_end" and name in (
             "parse", "cache_query", "code_gen", "sandbox",
-            "restore", "quality", "structure_analyzer", "cache_save"
+            "restore", "quality", "structure_analyzer", "cache_save",
+            "kv_code_gen", "kv_quality", "kv_cache_save"
         ):
             yield {
                 "type": "node_end",

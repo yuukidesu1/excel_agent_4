@@ -1,7 +1,8 @@
 """
-nodes/cache_query.py — 细粒度缓存查询节点
+nodes/cache_query.py — 细粒度缓存查询节点（支持表格模式和 KV 模式）
 
 职责：
+    【表格模式】
     基于 PSA (前置结构分析器) 节点构建的各子表指纹，逐个进行缓存检索。
 
     工作流：
@@ -11,20 +12,34 @@ nodes/cache_query.py — 细粒度缓存查询节点
     4. 若未命中：将子表名称加入 missed_subtables 列表，供下游 LLM 处理。
     5. 更新宏观调度标志 (all_cached, partial_cached)。
 
+    【KV 模式】
+    1. 基于 kv_list 和 sheet 特征构建缓存 Key。
+    2. 查询 L1 缓存（完全匹配：同一个 Excel 文件）。
+    3. 查询 L2 缓存（结构匹配：不同 Excel 但结构相同）。
+    4. 若命中：将缓存代码填充到 state，供下游 kv_sandbox 直接使用。
+    5. 若未命中：标记 missed=True，交由 kv_code_gen 节点生成新代码。
+
 注意：本节点纯代码执行，不调用 LLM。
 """
 
 from typing import Dict, Any
 
 from excel_agent.state import AgentState, CacheState
-from excel_agent.cache_manager import l2_get, apply_code_offset
+from excel_agent.cache_manager import l2_get, apply_code_offset, l1_get
+from excel_agent.nodes.kv_cache_save import build_kv_cache_key, compute_kv_structure_signature
 
 
 def cache_query_node(state: AgentState) -> dict:
-    """按子表粒度查询缓存，并执行代码坐标偏移修正"""
+    """按子表粒度查询缓存，并执行代码坐标偏移修正（支持表格模式和 KV 模式）"""
     config = state.get("config", {})
     sheet_name = config.get("sheet_name")
+    extract_type = config.get("extract_type", "table")
 
+    # ==================== KV 模式缓存查询 ====================
+    if extract_type and extract_type.lower() == "kv":
+        return _kv_cache_query(state)
+
+    # ==================== 表格模式缓存查询 ====================
     cache_state: CacheState = state.get("cache", {})
     entries = cache_state.get("entries", {})
 
@@ -95,3 +110,89 @@ def cache_query_node(state: AgentState) -> dict:
     cache_state["missed_subtables"] = missed_subtables
 
     return {"cache": cache_state}
+
+
+def _kv_cache_query(state: AgentState) -> dict:
+    """
+    KV 模式缓存查询逻辑
+
+    查询策略：
+    1. 先查 L1 缓存（完全匹配，同一个 Excel 文件）
+    2. 再查 L2 缓存（结构匹配，不同 Excel 但结构相同）
+    3. 若命中，直接返回缓存代码；若未命中，交由 LLM 生成
+    """
+    config = state.get("config", {})
+    sheet_name = config.get("sheet_name", "")
+    kv_list = config.get("kv_list", [])
+    excel_path = config.get("excel_path", "")
+
+    # 如果没有 kv_list，直接返回未命中
+    if not kv_list:
+        return {
+            "cache": {
+                "hit": False,
+                "cache_level": "miss",
+                "missed": True
+            }
+        }
+
+    # 获取 sheet 结构信息（用于构建缓存 Key）
+    sheet_structure = state.get("sheet_structure", {})
+    max_row = sheet_structure.get("max_row", 0)
+    max_col = sheet_structure.get("max_col", 0)
+
+    # ==================== 1. 查询 L1 缓存（完全匹配）====================
+    l1_data = l1_get(
+        excel_path=excel_path,
+        sheet_name=sheet_name,
+        subtable_titles=kv_list
+    )
+
+    if l1_data:
+        # L1 命中：直接返回缓存代码
+        code = l1_data.get("generated_code", "")
+        print(f"✅ KV 缓存 L1 命中：key={build_kv_cache_key(sheet_name, kv_list, max_row, max_col)}")
+        return {
+            "cache": {
+                "hit": True,
+                "cache_level": "l1",
+                "missed": False,
+                "code": code,
+                "l1_data": l1_data
+            }
+        }
+
+    # ==================== 2. 查询 L2 缓存（结构匹配）====================
+    structure_signature = compute_kv_structure_signature(kv_list, sheet_structure)
+
+    if structure_signature:
+        l2_data = l2_get(
+            sheet_name=sheet_name,
+            structure_signature=structure_signature
+        )
+
+        if l2_data:
+            # L2 命中：返回缓存代码
+            code = l2_data.get("generated_code", "")
+            print(f"✅ KV 缓存 L2 命中：signature={structure_signature}")
+            return {
+                "cache": {
+                    "hit": True,
+                    "cache_level": "l2",
+                    "missed": False,
+                    "code": code,
+                    "l2_data": l2_data,
+                    "structure_signature": structure_signature
+                }
+            }
+
+    # ==================== 3. 未命中，交由 LLM 生成 ====================
+    print(f"❌ KV 缓存未命中，将交由 LLM 生成代码")
+    return {
+        "cache": {
+            "hit": False,
+            "cache_level": "miss",
+            "missed": True,
+            "structure_signature": structure_signature
+        }
+    }

@@ -8,7 +8,6 @@ subtable_titles:
 
 subtable_configs:
   "2G Configuration":
-    layout: "仅列"
     col_headers:
       - "SYSTEM MODULE"
       - "CELL"
@@ -18,7 +17,6 @@ subtable_configs:
       - "ANTENNAS||Antenna Type"
 
   "3G Configuration":
-    layout: "仅列"
     col_headers:
       - "SYSTEM MODULE"
       - "CELL"
@@ -28,14 +26,12 @@ subtable_configs:
       - "ANTENNAS||Antenna Type"
 
   "4G Configuration":
-    layout: "仅列"
     col_headers:
       - "RF MODULE||QTY."
       - "ANTENNAS||NEW/SWAP/EXIST"
       - "ANTENNAS||Antenna Type"
 
   "5G Configuration":
-    layout: "仅列"
     col_headers:
       - "SYSTEM MODULE"
       - "CELL"

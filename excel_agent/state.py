@@ -25,12 +25,12 @@ class SubtableConfig(TypedDict, total=False):
     """
     单个子表的详细抽取配置
     """
-    layout: str     # “仅行” ｜ “仅列” ｜ “交叉” | “kv_table”
+    layout: str     # "仅行" | "仅列" | "交叉" | "kv_table"
     col_headers: List[str]
     row_headers: List[str]
     keys: List[str]
 
-class ConfigState(TypedDict):
+class ConfigState(TypedDict, total=False):
     excel_path: str
     sheet_name: str
     subtable_titles: List[str] # str -> List[str] 以适配多子表抽取
@@ -38,12 +38,16 @@ class ConfigState(TypedDict):
     # target_columns: Optional[Dict[str, List[Dict[str, Any]]]]
     subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]]
 
+    # KV 抽取模式相关字段
+    extract_type: str  # "table" | "kv"
+    kv_list: Optional[List[str]]  # KV 抽取模式下的 Key 列表
+
 class SubtableCacheEntry(TypedDict):
     """
     单个子表的缓存流转对象。
     在流水线中按阶段被不同的节点逐步填充。
     """
-    # 一阶段，PSA节点纯代码写入
+    # 一阶段，PSA 节点纯代码写入
     target_title: str       # 子表名称
     signature: str          # 该子表的 L2 结构指纹
     start_row: int          # 起始行
@@ -62,7 +66,7 @@ class SubtableCacheEntry(TypedDict):
     code: Optional[str]     # 专门针对该字表的、可独立运行的纯净 Python 提取代码
     header_map: Optional[Dict[str, Any]]    # 该子表的表头映射关系
 
-    # 四阶段：★ 新增！执行与合并期 (为 Sandbox/Extract 准备) ──
+    # 四阶段：执行与合并期 (为 Sandbox/Extract 准备)
     # 当 Sandbox 节点执行完后，或者在 Cache Query 节点直接执行后，
     # 属于该子表的、最终提取出来的 2D 数组数据存放在这里。
     # 这样后续节点就能把 cached_data 和 LLM 新提取的数据拼到一起！
@@ -100,7 +104,10 @@ class AgentState(TypedDict):
 
     # ── sandbox_node 输出 ───────────────────────────────────────────────
     raw_result: Optional[Dict[str, List[List[Any]]]]   # Optional[List[List[Any]]] -> Optional[Dict[str, List[List[Any]]]]
-    # 代码执行后返回的原始二维数组(含表头行)
+    # 代码执行后返回的原始二维数组 (含表头行)
+
+    # ── KV 模式专用 ───────────────────────────────────────────────
+    kv_result: Optional[Dict[str, str]]  # KV 抽取结果 {key: value}
 
     # ── restore_node 输出 ───────────────────────────────────────────────
     result:     Optional[Dict[str, List[List[str]]]]              # Optional[List[List[str]]] -> Optional[Dict[str, List[List[str]]]]
