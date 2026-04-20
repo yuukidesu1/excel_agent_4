@@ -51,6 +51,8 @@ def parse_node(state: AgentState) -> dict:
     non_empty_cells:   List[Dict] = []
     potential_headers: List[Dict] = []
     merged_coords = set()
+    user_configs = state.get("config")
+    user_titles = user_configs.get("subtable_titles")
 
     # 先收集合并单元格坐标
     for m in ws.merged_cells.ranges:
@@ -109,6 +111,8 @@ def parse_node(state: AgentState) -> dict:
                 c["value"] for c in non_empty_cells
                 if block_start <= c["row"] <= block_start + 2
             ]
+            for user_title in user_titles:
+                title_candidates.append(user_title)
             potential_subtables.append({
                 "start_row":        block_start,
                 "end_row":          r - 1,
