@@ -3,3 +3,41 @@
 /WPSlingxi/
 /utils/
 /configs/*.yaml
+/configs/generalization_test/56A0DS6_PowerLoadInformation.yaml
+/gradio_app/components/__init__.py
+/gradio_app/utils/__init__.py
+/gradio_app/__init__.py
+/gradio_app/app.py
+/gradio_app/utils/config_builder.py
+/configs/generalization_test/CONFIGURATION2.yaml
+/gradio_app/components/excel_loader.py
+/gradio_app/utils/excel_parser.py
+/extraction_cache.json
+/dev/KV Agent方案抽取设计.md
+/dev/KV 多子表检测修复总结.md
+/dev/KV 布局自动检测方案.md
+/dev/KV 布局误判修复总结.md
+/excel_agent/nodes/kv_cache_save.py
+/excel_agent/nodes/kv_code_gen.py
+/excel_agent/nodes/kv_feedback.py
+/configs/kv_test/kv_list.yaml
+/excel_agent/nodes/kv_quality.py
+/excel_agent/nodes/kv_sandbox.py
+/configs/kv_test/kv_table_test.yaml
+/configs/test/KV_TEST.yaml
+/gradio_app/components/log_viewer.py
+/main_gradio.py
+/configs/kv_test/multi_kv_subtables.yaml
+/configs/generalization_test/MW_56A0DS6.yaml
+/configs/kv_test/MW_56A0DS6_kv.yaml
+/configs/generalization_test/Power_56A0NNC.yaml
+/gradio_app/components/result_display.py
+/excel_agent/nodes/structure_analyzer_claude_copy.py
+/excel_agent/nodes/structure_analyzer_copy.py
+/configs/test/test_cross.yaml
+/configs/test/test_horizontal.yaml
+/test_kv_mode.py
+/configs/test/TEST_WL_56A0DS6_mix.yaml
+/configs/generalization_test/WL_56A0DS6.yaml
+/ws_test_file_use2.xlsx
+/dev/配置标准化清理文档.md

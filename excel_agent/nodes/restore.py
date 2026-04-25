@@ -1,12 +1,11 @@
 """
 nodes/restore.py — 结果组装 + 列过滤（纯代码）
 
-新增功能：列过滤
-  若 state["config"] 中存在 subtable_configs / target_columns，则只输出指定的列。
+功能：列过滤
+  若 state["config"] 中存在 subtable_configs，则只输出指定的 headers 列。
 
   匹配规则：
-    - 兼容新版配置：提取 col_headers 或 row_headers 列表中的 "A||B" 字符串
-    - 兼容旧版配置：提取 {"parent": "A", "child": "B"} 字典
+    - 支持多级表头："A||B" 格式
     - 忽略大小写 + 忽略空格/换行符
 """
 
@@ -30,15 +29,12 @@ def _norm(s: Optional[str]) -> str:
     return s.lower().replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "")
 
 
-def _parse_target(target: Union[str, Dict]) -> tuple:
+def _parse_target(target: str) -> tuple:
     """
-    统一解析 target，返回 (parent, child) 元组。
-    支持旧版 dict: {"parent": "A", "child": "B"}
-    支持新版 str:  "A||B" 或 "B"
+    解析 target，返回 (parent, child) 元组。
+    支持格式："A||B" 或 "B"
     """
-    if isinstance(target, dict):
-        return target.get("parent"), str(target.get("child", ""))
-    elif isinstance(target, str):
+    if isinstance(target, str):
         if "||" in target:
             parts = target.split("||", 1)
             return parts[0], parts[1]
@@ -46,7 +42,7 @@ def _parse_target(target: Union[str, Dict]) -> tuple:
     return None, str(target)
 
 
-def _find_col_index(header: List[str], target: Union[str, Dict]) -> int:
+def _find_col_index(header: List[str], target: str) -> int:
     """
     在表头行中找到 target 对应的列索引（-1 表示未找到）。
     """
@@ -73,7 +69,7 @@ def _find_col_index(header: List[str], target: Union[str, Dict]) -> int:
     return -1  # 未找到
 
 
-def _find_row_index(first_col: List[str], target: Union[str, Dict]) -> int:
+def _find_row_index(first_col: List[str], target: str) -> int:
     """
     在首列（行头）中找到 target 对应的行索引（-1 表示未找到）。
     用于"仅行"布局的行过滤。
@@ -107,8 +103,8 @@ def restore_node(state: AgentState) -> dict:
     sheet_structure = state.get("sheet_structure", {})
     cache_state = state.get("cache", {})
 
-    # 获取配置 (优先新版 subtable_configs)
-    target_columns_config = config.get("subtable_configs") or config.get("target_columns")
+    # 获取配置
+    subtable_configs = config.get("subtable_configs")
     # 获取子表标题列表（用于过滤逻辑）
     subtable_titles = config.get("subtable_titles", [])
 
@@ -194,27 +190,14 @@ def restore_node(state: AgentState) -> dict:
         header = formatted[0] if formatted else []
         data_rows = formatted[1:] if len(formatted) > 1 else []
 
-        # ── 1. 安全提取当前子表的 target 列表 ──
-        current_targets_raw = None
-        if isinstance(target_columns_config, dict):
-            current_targets_raw = target_columns_config.get(title)
-        elif isinstance(target_columns_config, list):
-            current_targets_raw = target_columns_config
-
-        # ── 2. 剥离字典结构，拿到真正的 headers 列表 ──
+        # 提取当前子表的 headers 列表
         current_targets = []
-        if isinstance(current_targets_raw, dict):
-            # 如果是新版配置字典，根据 layout 提取对应的 headers
-            layout = current_targets_raw.get("layout", "仅列")
-            if layout in ["仅行", "kv_table"]:
-                current_targets = current_targets_raw.get("row_headers", [])
-            else:
-                current_targets = current_targets_raw.get("col_headers", [])
-        elif isinstance(current_targets_raw, list):
-            # 如果是旧版，本身就是列表
-            current_targets = current_targets_raw
+        if isinstance(subtable_configs, dict):
+            current_targets = subtable_configs.get(title, {}).get("headers", [])
+        elif isinstance(subtable_configs, list):
+            current_targets = subtable_configs
 
-        # ── 3. 执行过滤 ──
+        # 执行过滤
         if current_targets:
             keep_indices: List[int] = []
             keep_labels: List[str] = []

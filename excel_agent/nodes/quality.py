@@ -37,7 +37,7 @@ def quality_node(state: AgentState) -> dict:
     ) # 修复读取不到config的问题
     if isinstance(target_titles, str):
         target_titles = [target_titles]
-    target_columns = config.get("subtable_configs") or config.get("target_columns") or state.get("subtable_configs") or state.get("target_columns")
+    subtable_configs = config.get("subtable_configs") or state.get("subtable_configs")
 
     if not result:
         score -= 0.50
@@ -64,10 +64,10 @@ def quality_node(state: AgentState) -> dict:
 
         # 🚀 获取当前子表的列过滤规则
         current_targets = None
-        if isinstance(target_columns, dict):
-            current_targets = target_columns.get(title)
-        elif isinstance(target_columns, list):
-            current_targets = target_columns
+        if isinstance(subtable_configs, dict):
+            current_targets = subtable_configs.get(title)
+        elif isinstance(subtable_configs, list):
+            current_targets = subtable_configs
 
         # 检查丢失的列
         if current_targets:

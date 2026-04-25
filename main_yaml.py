@@ -24,7 +24,6 @@ def main(config_file: str):
 
     # KV 模式使用 kv_list，表格模式使用 subtable_titles
     subtable_titles = config.get("subtable_titles") or config.get("kv_list")
-    # target_columns = config.get("target_columns", None)
     subtable_configs = config.get("subtable_configs") or config.get("target_columns")
 
     if not all([excel_path, sheet_name, subtable_titles]) and extract_type != "kv" and extract_type != "KV":
@@ -51,6 +50,14 @@ def main(config_file: str):
         kwargs["extract_type"] = "kv"
         kwargs["kv_list"] = subtable_titles
 
+    # 🚀 用户明确意图优先：如果配置了 kv_list，直接传递（无论 extract_type 是什么）
+    kv_list_from_config = config.get("kv_list")
+    if kv_list_from_config:
+        kwargs["kv_list"] = kv_list_from_config
+        # 如果没有显式指定 extract_type，也设置为 kv
+        if "extract_type" not in kwargs:
+            kwargs["extract_type"] = "kv"
+
     print("开始执行抽取任务...")
     result = run_extraction(**kwargs)
 
@@ -69,21 +76,33 @@ def main(config_file: str):
     print(f"\n── LLM 生成的代码 ──────────────────────────────────")
     print(result.get("generated_code", "（无）"))
 
-    if result.get("data"):
-        extracted_data = result["data"]
+    # 判断是否是 KV 模式（配置文件指定或 PSA 检测到 KV 布局）
+    is_kv_mode = (extract_type and extract_type.lower() == "kv") or (result.get("kv_result") is not None)
 
-        # 1. 如果返回的是字典（多个子表）
-        if isinstance(extracted_data, dict) and extract_type.lower() != "kv":
-            print("\n── 多子表抽取结果汇总 ──────────────────────────────")
-            for table_name, rows in extracted_data.items():
-                if rows and isinstance(rows, list):
-                    # 假设第一行是表头，数据行数为 len(rows) - 1
-                    data_rows = len(rows) - 1 if len(rows) > 0 else 0
-                    cols = len(rows[0]) if data_rows >= 0 and isinstance(rows[0], list) else 0
-                    print(f" 📊 [{table_name}]: {data_rows} 行数据 × {cols} 列")
-                else:
-                    print(f" ⚠ [{table_name}]: 提取结果为空或格式不符")
-            print("──────────────────────────────────────────────────")
+    if result.get("data") or result.get("kv_result"):
+        # KV 模式优先使用 kv_result
+        extracted_data = result.get("kv_result") if is_kv_mode else result.get("data")
+
+        # 1. 如果返回的是字典（多子表或 KV 模式）
+        if isinstance(extracted_data, dict):
+            if is_kv_mode:
+                # KV 模式：{key: value} 格式
+                print("\n── KV 抽取结果 ──────────────────────────────")
+                print(f" 📊 共抽取 {len(extracted_data)} 个键值对")
+                for key, value in extracted_data.items():
+                    print(f"   • {key}: {value[:50] if value and len(value) > 50 else value}")
+                print("────────────────────────────────────────────────")
+            else:
+                # 表格模式：多子表
+                print("\n── 多子表抽取结果汇总 ──────────────────────────────")
+                for table_name, rows in extracted_data.items():
+                    if rows and isinstance(rows, list):
+                        data_rows = len(rows) - 1 if len(rows) > 0 else 0
+                        cols = len(rows[0]) if data_rows >= 0 and isinstance(rows[0], list) else 0
+                        print(f" 📊 [{table_name}]: {data_rows} 行数据 × {cols} 列")
+                    else:
+                        print(f" ⚠ [{table_name}]: 提取结果为空或格式不符")
+                print("──────────────────────────────────────────────────")
 
         # 2. 如果返回的是二维列表（单个表格，向下兼容）
         elif isinstance(extracted_data, list):
@@ -117,7 +136,9 @@ if __name__ == "__main__":
         # default="./configs/generalization_test/Power_56A0NNC.yaml",
         # default="./configs/test/test_cross.yaml",
         # default="./configs/test/TEST_WL_56A0DS6_mix.yaml",
-        default="./configs/kv_test/kv_list.yaml",
+        # default="./configs/kv_test/kv_list.yaml",
+        default="./configs/generalization_test/CONFIGURATION.yaml",
+        # default="./configs/kv_test/kv_table_test.yaml",
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )
     args = parser.parse_args()

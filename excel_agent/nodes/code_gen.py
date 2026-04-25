@@ -25,7 +25,7 @@ _SYSTEM_PROMPT = """\
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【输入上下文信息】
   - subtable_titles   : 目标子表名称列表
-  - subtable_configs  : 抽取配置（包含需要的 col_headers 或 row_headers）
+  - subtable_configs  : 抽取配置（包含需要的 headers 列表）
   - psa_hints         : 提供子表的 layout_type(布局)、start_row(起步行)、start_col(起步列)
   - sheet_structure   : 包含非空/合并单元格的坐标与值
 
@@ -166,8 +166,8 @@ def code_gen_node(state: AgentState) -> dict:
     if subtable_titles is None:
         subtable_titles = config.get("subtable_titles", [])
 
-    # 2. 兼容新旧配置
-    subtable_configs = config.get("subtable_configs") or config.get("target_columns")
+    # 2. 获取 subtable_configs
+    subtable_configs = config.get("subtable_configs")
     hints = config.get("hints")
 
     # 3. ★ 核心提取：提取 PSA 识别出的物理锚点与布局类型

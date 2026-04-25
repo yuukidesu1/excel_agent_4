@@ -1,0 +1,12 @@
+excel_path: "./ws_test_file_use.xlsx"
+sheet_name: "Power_56A0NNC"
+
+extract_type: "KV"
+kv_list:
+  - "Site Power Supply"
+  - "Local Main Switch Breaker Siez(In Site DB)"
+  - "Rectifier Current Reading(A)"
+  - "Capacity of each Battery module (Ah)"
+  - "Smart Meter Detial"
+  - "Quantity of Rectifier Module Slots(pcs)"
+  - "Rectifier Free Breaker 90A Qty"

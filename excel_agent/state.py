@@ -3,7 +3,7 @@ state.py — 全局状态定义
 
 输入：
     必填：excel_path, sheet_name, subtable_titles
-    可选：target_columns  → 只保留指定列（None = 保留全部）
+    可选：subtable_configs → 只保留指定列（headers 列表）
           hints           → 额外定位提示
 """
 import operator
@@ -26,16 +26,14 @@ class SubtableConfig(TypedDict, total=False):
     单个子表的详细抽取配置
     """
     layout: str     # "仅行" | "仅列" | "交叉" | "kv_table"
-    col_headers: List[str]
-    row_headers: List[str]
+    headers: List[str]
     keys: List[str]
 
 class ConfigState(TypedDict, total=False):
     excel_path: str
     sheet_name: str
-    subtable_titles: List[str] # str -> List[str] 以适配多子表抽取
+    subtable_titles: List[str]
     hints: Optional[str]
-    # target_columns: Optional[Dict[str, List[Dict[str, Any]]]]
     subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]]
 
     # KV 抽取模式相关字段

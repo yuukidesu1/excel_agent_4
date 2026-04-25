@@ -174,12 +174,170 @@ def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_co
 
 # ==================== 3. 主流程 ====================
 
+
+def _check_headers_kv_layout(
+    cell_map: Dict,
+    merged_map: Dict,
+    start_row: int,
+    start_col: int,
+    headers: List[str],
+    search_range: int = 30
+) -> tuple[bool, List[str]]:
+    """
+    检查用户配置的 headers 是否呈现 KV 布局特征
+
+    核心逻辑：
+    1. 在 Excel 中查找每个 header 的位置
+    2. 检查这些 header 是否都在同一列或相邻列（Key 列）
+    3. **关键区分**：表头行 vs KV 数据行
+
+    Args:
+        cell_map: 单元格值映射
+        merged_map: 合并单元格映射
+        start_row, start_col: 子表起始位置
+        headers: 用户配置的 headers
+        search_range: 向下搜索范围
+
+    Returns:
+        (is_kv_layout, matched_headers)
+        - is_kv_layout: 是否为 KV 布局
+        - matchedHeaders: 匹配到的 headers（用于确认哪些 Keys 存在）
+    """
+    if not headers:
+        return False, []
+
+    # 用于记录找到的 header 及其位置
+    found_headers = []
+
+    for header in headers:
+        header_norm = _normalize(header)
+        if not header_norm:
+            continue
+
+        # 在区域内搜索该 header
+        found = False
+        for r in range(start_row, start_row + search_range):
+            for c in range(start_col, start_col + 10):  # 假设 Key 在左侧 10 列内
+                val = cell_map.get((r, c))
+                if val and _normalize(val) == header_norm:
+                    # 检查同一行是否有其他单元格
+                    same_row_cells = []
+                    for check_c in range(start_col, start_col + 25):  # 扫描更宽的范围
+                        if check_c != c:
+                            neighbor_val = cell_map.get((r, check_c))
+                            if neighbor_val:
+                                same_row_cells.append(neighbor_val)
+
+                    # 检查下方是否有其他行（KV 邻居特征）
+                    has_row_below = any(
+                        cell_map.get((r + offset, c)) is not None
+                        for offset in range(1, 4)
+                    )
+
+                    # 🚀 关键区分：表头行 vs KV 数据行
+                    is_like_table_header = False
+
+                    # 判断 1：如果 header 本身很短（<20 字符）且是全大写，则是表头
+                    if len(header) < 20 and header.upper() == header:
+                        is_like_table_header = True
+
+                    # 判断 2：检查同一行的其他单元格
+                    if len(same_row_cells) >= 1:
+                        # 统计同一行中有多少个"长文本 Key 特征"的单元格
+                        # KV 布局：同一行的其他单元格也是长文本（其他 Key）或短 Value（Yes/No/数字）
+                        # 表头行：同一行的其他单元格也是短表头（<20 字符，不是 Value 特征）
+
+                        long_keys_in_row = [
+                            cell for cell in same_row_cells
+                            if len(str(cell)) > 15  # 长文本，像 Key
+                        ]
+
+                        short_header_like = [
+                            cell for cell in same_row_cells
+                            if len(str(cell)) < 20 and
+                               str(cell).upper() == str(cell) and  # 全大写
+                               not str(cell).lower() in ['yes', 'no', 'true', 'false', 'n/a', ''] and
+                               not str(cell).isdigit()
+                        ]
+
+                        # 🚀 修改：如果同一行有≥3 个全大写短表头，则是表头行（优先于长文本判断）
+                        if len(short_header_like) >= 3:
+                            is_like_table_header = True
+                        # 如果同一行有多个长文本 Key，且短表头<3 个，说明这是 KV 数据行（多列 KV 布局）
+                        elif len(long_keys_in_row) >= 1:
+                            is_like_table_header = False  # 这是 KV 布局的其他 Key
+
+                    found_headers.append({
+                        "header": header,
+                        "row": r,
+                        "col": c,
+                        "row_has_other_cells": len(same_row_cells) > 0,
+                        "has_row_below": has_row_below,
+                        "is_like_table_header": is_like_table_header
+                    })
+                    found = True
+                    break
+            if found:
+                break
+
+    if len(found_headers) == 0:
+        return False, []
+
+    # 判断是否符合 KV 布局特征
+    kv_like_count = sum(
+        1 for h in found_headers
+        if (h["row_has_other_cells"] or h["has_row_below"]) and not h["is_like_table_header"]
+    )
+
+    # 2. 找到的 headers 的列位置应该比较集中（都在同一列或相邻列）
+    if len(found_headers) >= 2:
+        cols = [h["col"] for h in found_headers]
+        col_span = max(cols) - min(cols) + 1
+        is_concentrated = col_span <= 3
+    else:
+        is_concentrated = True
+
+    # 🚀 如果超过 50% 的 headers 像表头，则不是 KV 布局
+    header_like_count = sum(1 for h in found_headers if h["is_like_table_header"])
+    if len(found_headers) > 0 and header_like_count / len(found_headers) >= 0.5:
+        return False, []
+
+    # 判定：找到至少 1 个 header，且符合 KV 特征，且不像表头
+    is_kv = (
+        len(found_headers) >= 1 and
+        (kv_like_count / len(found_headers) >= 0.5 or len(found_headers) == 1) and
+        is_concentrated
+    )
+
+    if is_kv:
+        return True, [h["header"] for h in found_headers]
+    return False, []
+
+
 def pre_structure_analyzer_node(state: AgentState) -> dict:
-    """PSA 主节点逻辑（当前暂不涉及 KV 模式）"""
+    """PSA 主节点逻辑（支持多子表 KV 布局自动检测）"""
     config = state.get("config", {})
 
-    # KV 模式直接跳过 PSA 分析，KV 缓存不依赖 subtable_title 建档
+    # 🚀 用户明确意图优先：如果配置了 kv_list，直接使用，不进行任何检测
+    global_kv_list = config.get("kv_list", [])
     extract_type = config.get("extract_type", "table")
+
+    # 如果用户已经配置了 kv_list（全局或子表级别），直接切换到 KV 模式
+    if global_kv_list:
+        config["extract_type"] = "kv"
+        config["kv_list"] = global_kv_list  # 确保 config 中也设置，供 downstream 节点使用
+        # 将 kv_list 传递给 downstream 节点
+        return {
+            "cache": {
+                "hit": False,
+                "missed": True,
+                "kv_auto_detected": False,  # 用户明确配置，非自动检测
+                "kv_list": global_kv_list
+            },
+            "config": config
+        }
+
+    # KV 模式（配置文件指定 extract_type="kv"）直接跳过 PSA 分析，KV 缓存不依赖 subtable_title 建档
     if extract_type and extract_type.lower() == "kv":
         return {"cache": state.get("cache", {})}
 
@@ -205,6 +363,9 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
 
     entries: Dict[str, SubtableCacheEntry] = {}
 
+    # 用于收集所有子表中检测到的 KV 配置
+    kv_subtables: Dict[str, List[str]] = {}  # {title: kv_list}
+
     for target_title in subtable_titles:
         norm_target_title = _normalize(target_title)
         sub_info = None
@@ -228,79 +389,74 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
         sr, sc = sub_info["start_row"], sub_info["start_col"]
         tr_span = sub_info["title_row_span"]
 
-        # ── 2. 解析用户配置的目标字段（不再依赖 layout 配置） ──
-        col_headers = []
-        row_headers = []
+        # ── 2. 解析用户配置的目标字段 ──
+        headers = []
 
-        # 兼容读取 (无论是新版的 subtable_configs 还是旧版的 target_columns)
-        target_configs_dict = config.get("subtable_configs") or config.get("target_columns") or {}
+        target_configs_dict = config.get("subtable_configs") or {}
         tc_def = target_configs_dict.get(target_title)
 
         if isinstance(tc_def, dict):
-            col_headers = tc_def.get("col_headers", [])
-            row_headers = tc_def.get("row_headers", [])
+            headers = tc_def.get("headers", [])
         elif isinstance(tc_def, list):
-            # 旧版的 parent/child YAML 列表结构
-            for item in tc_def:
-                if isinstance(item, dict):
-                    if "name" in item:
-                        col_headers.append(str(item["name"]))
-                    elif "child" in item:
-                        # 兼容你旧版的 {"parent": "xx", "child": "yy"} 格式
-                        p = item.get("parent")
-                        c = item.get("child")
-                        if p:
-                            col_headers.append(f"{p}||{c}")
-                        else:
-                            col_headers.append(str(c))
-                else:
-                    col_headers.append(str(item))
+            # 列表结构直接作为 headers
+            headers = [str(item) for item in tc_def]
 
-        # ── 3. 扫描目标表头提取特征（不预设 layout，全部扫描） ──
+        # ── 3. 扫描目标表头提取特征 ──
         col_h = []
         row_h = []
 
-        # 同时扫描列表头和行表头
-        if col_headers:
+        # 扫描列表头
+        if headers:
             col_h = _scan_headers(
                 cell_map, merged_map,
                 sr, min(sr + tr_span + 15, max_row),
                 sc, max_col,
-                col_headers, "col", sr, sc
+                headers, "col", sr, sc
             )
 
-        if row_headers:
-            row_h = _scan_headers(
+        # ── 3.5 KV 布局自动检测 ──
+        # 即使用户配置成了"表格模式"，如果实际是 KV 布局，自动切换到 KV 模式
+        kv_layout_detected = False
+        extracted_kv_list: List[str] = []
+
+        # 尝试从用户配置的 headers 中检测 KV 布局
+        if headers:
+            # 使用新的检查逻辑：基于用户配置的 headers 判断
+            is_kv, matched_headers = _check_headers_kv_layout(
                 cell_map, merged_map,
-                sr, max_row,
-                sc, min(sc + tr_span + 10, max_col),
-                row_headers, "row", sr, sc
+                sr, sc,
+                headers,
+                search_range=30
             )
 
-        # ── 3.5 自动判断布局类型 ──
-        # 优先使用扫描到的表头信息，算法判断 layout
-        all_found_headers = col_h + row_h
-        layout = _detect_layout(all_found_headers)
+            if is_kv:
+                kv_layout_detected = True
+                # 使用用户配置的 headers（匹配到的）作为 kv_list
+                extracted_kv_list = headers  # 使用全部配置的 headers，LLM 会处理找不到的情况
 
+                # 记录该子表的 KV 配置
+                kv_subtables[target_title] = extracted_kv_list
 
+                # 记录日志
+                print(f"🔄 [PSA 节点] 检测到子表 '{target_title}' 为 KV 布局")
+                print(f"   用户配置的 Headers: {len(headers)} 个")
+                print(f"   匹配到的 Keys: {len(matched_headers)} 个")
+
+        # 如果检测到 KV 布局，跳过该子表的表格模式建档
+        if kv_layout_detected:
+            continue
 
         # ── 4. 计算精准结构指纹 (Signature) ──
 
         fingerprint_data = {
             "title_pattern": norm_target_title,
-            "layout": layout,
-            "col_headers": sorted(col_h, key=lambda x: (x["rel_row"], x["rel_col"])),
-            "row_headers": sorted(row_h, key=lambda x: (x["rel_row"], x["rel_col"]))
+            "headers": sorted(col_h, key=lambda x: (x["rel_row"], x["rel_col"]))
         }
 
         signature = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()[:16]
 
         # ── 5. 组装建档 ──
-        # layout_en = "vertical" if layout == "仅列" else ("horizontal" if layout == "仅行" else "cross")
         layout_en = "vertical"
-        if layout == "仅行" : layout_en = "horizontal"
-        elif layout == "仅列" : layout_en = "vertical"
-        elif layout == "交叉" : layout_en = "cross"
 
         entries[target_title] = {
             "target_title": target_title,
@@ -315,10 +471,36 @@ def pre_structure_analyzer_node(state: AgentState) -> dict:
             "l2_col_offset": 0,
             "code": None,
             "header_map": {  # 填入 PSA 识别的表头信息，供 code_gen 节点使用
-                "col_headers": col_h,  # List[Dict: {target, rel_row, rel_col, row_span, col_span}]
-                "row_headers": row_h,
+                "headers": col_h,  # List[Dict: {target, rel_row, rel_col, row_span, col_span}]
             },
             "extracted_data": None
+        }
+
+    # ── 处理 KV 子表 ──
+    # 如果有任何子表被检测为 KV 布局，切换到 KV 模式
+    if kv_subtables:
+        config["extract_type"] = "kv"
+        # 合并所有 KV 子表的 kv_list
+        all_kv_keys = []
+        for title, keys in kv_subtables.items():
+            all_kv_keys.extend(keys)
+        config["kv_list"] = all_kv_keys
+
+        # 如果是多子表 KV 模式，需要特殊处理
+        if len(kv_subtables) > 1:
+            print(f"🔄 [PSA 节点] 检测到 {len(kv_subtables)} 个 KV 子表，将合并处理")
+
+        print(f"🔄 [PSA 节点] 切换到 KV 模式，共 {len(all_kv_keys)} 个 Keys")
+
+        return {
+            "cache": {
+                "hit": False,
+                "missed": True,
+                "kv_auto_detected": True,
+                "kv_list": all_kv_keys,
+                "kv_subtables": kv_subtables  # 记录哪些子表是 KV 模式
+            },
+            "config": config
         }
 
     cache_state["entries"] = entries

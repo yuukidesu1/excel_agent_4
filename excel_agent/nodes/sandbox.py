@@ -111,8 +111,8 @@ def sandbox_node(state: AgentState) -> dict:
     cache_state: CacheState = state.get("cache", {})
     entries = cache_state.get("entries", {})
 
-    # 兼容处理配置字段
-    target_configs = config.get("subtable_configs") or config.get("target_columns")
+    # 获取配置
+    subtable_configs = config.get("subtable_configs")
     hints = config.get("hints")
 
     # KV 模式专用
@@ -222,7 +222,6 @@ def sandbox_node(state: AgentState) -> dict:
                     "re": re, "math": math, "json": json,
                     "sheet_structure": state.get("sheet_structure"),
                     "subtable_titles": missed_subtables,
-                    "target_columns": target_configs,
                     "hints": hints,
                 }
 

@@ -8,7 +8,7 @@ subtable_titles:
 
 subtable_configs:
   "2G Configuration":
-    col_headers:
+    headers:
       - "SYSTEM MODULE"
       - "CELL"
       - "RF MODULE||TYPE"
@@ -17,7 +17,7 @@ subtable_configs:
       - "ANTENNAS||Antenna Type"
 
   "3G Configuration":
-    col_headers:
+    headers:
       - "SYSTEM MODULE"
       - "CELL"
       - "RF MODULE||TYPE"
@@ -26,13 +26,13 @@ subtable_configs:
       - "ANTENNAS||Antenna Type"
 
   "4G Configuration":
-    col_headers:
+    headers:
       - "RF MODULE||QTY."
       - "ANTENNAS||NEW/SWAP/EXIST"
       - "ANTENNAS||Antenna Type"
 
   "5G Configuration":
-    col_headers:
+    headers:
       - "SYSTEM MODULE"
       - "CELL"
       - "RF MODULE||TYPE"

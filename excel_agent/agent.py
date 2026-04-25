@@ -99,11 +99,12 @@ from excel_agent.nodes.kv_quality import kv_quality_node, route_after_kv_quality
 from excel_agent.nodes.kv_cache_save import kv_cache_save_node
 from excel_agent.nodes.kv_sandbox import kv_sandbox_node
 
-
-
-# 调试开关：设置为 true 时跳过 structure_analyzer 和 cache_save 节点
-# 使用方法：DEBUG_SKIP_ANALYZER=true python main.py
-DEBUG_SKIP_ANALYZER = os.getenv("DEBUG_SKIP_ANALYZER", "false").lower() == "true"
+# 开启 LangSmith 追踪
+from dotenv import load_dotenv
+load_dotenv()
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "excel_agent"
+os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 
 
 def _retry_node(state: AgentState) -> dict:
@@ -113,9 +114,13 @@ def _retry_node(state: AgentState) -> dict:
 def _route_after_retry(state: AgentState) -> str:
     """重试后路由：根据抽取类型决定回到哪个代码生成节点"""
     config = state.get("config", {})
+    # 通过 kv_list 判断是否是 KV 模式
+    kv_list = config.get("kv_list")
     extract_type = config.get("extract_type", "table")
 
-    if extract_type == "kv":
+    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or (extract_type and extract_type.lower() == "kv")
+
+    if is_kv_mode:
         return "kv_code_gen"
     return "code_gen"
 
@@ -123,11 +128,15 @@ def _route_after_retry(state: AgentState) -> str:
 def _route_after_cache(state: AgentState) -> str:
     """缓存查询后路由：根据缓存命中情况决定"""
     config = state.get("config", {})
+    # 通过 kv_list 判断是否是 KV 模式（用户配置或 PSA 检测到 KV 布局后设置）
+    kv_list = config.get("kv_list")
     extract_type = config.get("extract_type", "table")
     cache_state = state.get("cache", {})
 
-    # KV 模式：根据缓存命中情况决定
-    if extract_type and extract_type.lower() == "kv":
+    # KV 模式判断：有 kv_list 或 extract_type="kv"
+    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or (extract_type and extract_type.lower() == "kv")
+
+    if is_kv_mode:
         # KV 缓存命中：直接走 sandbox 执行缓存代码
         if cache_state.get("hit", False) and not cache_state.get("missed", True):
             return "kv_sandbox"
@@ -371,11 +380,15 @@ def run_extraction(
         )
     )
 
+    # 从 final 状态中读取实际的 extract_type（PSA 可能检测到 KV 布局并修改了它）
+    final_extract_type = final.get("config", {}).get("extract_type", extract_type)
+
     # KV 模式返回
-    if extract_type == "kv":
+    if final_extract_type == "kv" or kv_list:
         return {
             "success": final["quality_score"] >= KV_QUALITY_THRESHOLD,
             "data": final.get("kv_result"),
+            "kv_result": final.get("kv_result"),  # 额外添加，方便 main_yaml.py 读取
             "quality_score": final["quality_score"],
             "retry_count": final["retry_count"],
             "errors": final["errors"],
@@ -403,7 +416,6 @@ async def run_extraction_deep_stream(
     sheet_name: str,
     subtable_titles: List[str],
     hints: Optional[str] = None,
-    target_columns: Optional[List[Dict]] = None,
 ) -> AsyncGenerator[dict, None]:
     """
     异步流式入口（调试用）。
