@@ -33,14 +33,13 @@ def cache_query_node(state: AgentState) -> dict:
     """按子表粒度查询缓存，并执行代码坐标偏移修正（支持表格模式和 KV 模式）"""
     config = state.get("config", {})
     sheet_name = config.get("sheet_name")
-    # 通过 kv_list 判断是否是 KV 模式（用户配置或 PSA 检测到 KV 布局后设置）
+    # 通过 kv_list 判断是否是 KV 模式
     kv_list = config.get("kv_list")
     extract_type = config.get("extract_type", "table")
     cache_state = state.get("cache", {})
 
     # KV 模式判断：有 kv_list 或 extract_type="kv"
-    # 注意：PSA 节点检测到 KV 布局后会返回 cache.kv_auto_detected=True
-    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or (extract_type and extract_type.lower() == "kv") or cache_state.get("kv_auto_detected", False)
+    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or (extract_type and extract_type.lower() == "kv")
 
     # ==================== KV 模式缓存查询 ====================
     if is_kv_mode:
@@ -130,7 +129,7 @@ def _kv_cache_query(state: AgentState) -> dict:
     """
     config = state.get("config", {})
     sheet_name = config.get("sheet_name", "")
-    # 优先从 config 读取 kv_list，如果 PSA 检测到 KV 布局并返回了 cache.kv_list，也一并读取
+    # 优先从 config 读取 kv_list
     kv_list = config.get("kv_list") or state.get("cache", {}).get("kv_list", [])
     excel_path = config.get("excel_path", "")
 

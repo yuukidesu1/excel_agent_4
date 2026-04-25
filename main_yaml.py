@@ -50,7 +50,7 @@ def main(config_file: str):
         kwargs["extract_type"] = "kv"
         kwargs["kv_list"] = subtable_titles
 
-    # 🚀 用户明确意图优先：如果配置了 kv_list，直接传递（无论 extract_type 是什么）
+    # 用户明确意图优先：如果配置了 kv_list，直接传递（无论 extract_type 是什么）
     kv_list_from_config = config.get("kv_list")
     if kv_list_from_config:
         kwargs["kv_list"] = kv_list_from_config
