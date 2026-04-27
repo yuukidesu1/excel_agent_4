@@ -134,10 +134,41 @@ def sandbox_node(state: AgentState) -> dict:
     errors: List[str] = []
 
     # ==========================================================
-    # ── 双轨执行 Track 1: 运行命中缓存的独立子表代码 ──
+    # ── 双轨执行 Track 1a: 运行命中缓存的独立子表代码 (Table) ──
+    # ==========================================================
+    for title, entry in entries.items():
+        if entry.get("cache_hit") and entry.get("code"):
+            # 只执行 table 模式的缓存代码 (extract_mode != "kv")
+            if entry.get("extract_mode") == "kv":
+                continue
+            try:
+                # 为每个缓存代码提供独立的纯净命名空间
+                namespace = {
+                    "__builtins__": _SAFE_BUILTINS,
+                    "re": re, "math": math, "json": json
+                }
+                exec(compile(entry["code"], f"<cached_{title}>", "exec"), namespace)
+                extract_fn = namespace.get("extract")
+
+                if callable(extract_fn):
+                    sub_res = _run_with_timeout(lambda: extract_fn(ws, merged_map, entry.get("start_row"), entry.get("start_col")))
+
+                    # 鲁棒性兼容：SA 节点拆分出的代码可能返回二维数组，也可能返回字典 {title: 二维数组}
+                    if isinstance(sub_res, dict):
+                        sub_res = sub_res.get(title) or (list(sub_res.values())[0] if sub_res else [])
+
+                    final_raw_result[title] = sub_res
+                    entry["extracted_data"] = sub_res  # 填入 Stage 4，供后续 SA 打包
+                else:
+                    errors.append(f"缓存代码 [{title}] 中未找到 extract 函数。")
+            except Exception:
+                errors.append(f"缓存代码 [{title}] 执行失败:\n{traceback.format_exc()}")
+
+    # ==========================================================
+    # ── 双轨执行 Track 1b: 运行命中缓存的 KV 代码 ──
     # ==========================================================
     if extract_type == "kv":
-        # KV 模式：运行缓存代码
+        # 全局 KV 模式：运行缓存代码
         for title, entry in entries.items():
             if entry.get("cache_hit") and entry.get("code"):
                 try:
@@ -157,27 +188,22 @@ def sandbox_node(state: AgentState) -> dict:
                 except Exception:
                     errors.append(f"缓存代码 [{title}] 执行失败:\n{traceback.format_exc()}")
     else:
-        # 表格模式：运行命中缓存的独立子表代码
+        # 混合模式：执行 cached KV 代码
         for title, entry in entries.items():
-            if entry.get("cache_hit") and entry.get("code"):
+            if entry.get("cache_hit") and entry.get("code") and entry.get("extract_mode") == "kv":
                 try:
-                    # 为每个缓存代码提供独立的纯净命名空间
+                    scope = entry.get("scope")
                     namespace = {
                         "__builtins__": _SAFE_BUILTINS,
-                        "re": re, "math": math, "json": json
+                        "re": re, "math": math, "json": json,
+                        "kv_list": kv_list
                     }
                     exec(compile(entry["code"], f"<cached_{title}>", "exec"), namespace)
                     extract_fn = namespace.get("extract")
 
                     if callable(extract_fn):
-                        sub_res = _run_with_timeout(lambda: extract_fn(ws, merged_map, entry.get("start_row"), entry.get("start_col")))
-
-                        # 鲁棒性兼容：SA 节点拆分出的代码可能返回二维数组，也可能返回字典 {title: 二维数组}
-                        if isinstance(sub_res, dict):
-                            sub_res = sub_res.get(title) or (list(sub_res.values())[0] if sub_res else [])
-
-                        final_raw_result[title] = sub_res
-                        entry["extracted_data"] = sub_res  # 填入 Stage 4，供后续 SA 打包
+                        raw_kv = _run_with_timeout(lambda s=scope: extract_fn(ws, merged_map, kv_list, s))
+                        kv_result[title] = _validate_kv_result(raw_kv)
                     else:
                         errors.append(f"缓存代码 [{title}] 中未找到 extract 函数。")
                 except Exception:
@@ -189,61 +215,100 @@ def sandbox_node(state: AgentState) -> dict:
     # ==========================================================
     new_code_list = state.get("generated_code", [])
 
-    for new_code in new_code_list:
-        if extract_type == "kv":
-            # KV 模式：执行新生成的 KV 抽取代码
-            if new_code and kv_list:
-                namespace = {
-                    "__builtins__": _SAFE_BUILTINS,
-                    "re": re, "math": math, "json": json,
-                    "kv_list": kv_list
-                }
-
-                try:
-                    exec(compile(new_code, "<llm_generated>", "exec"), namespace)
-                    extract_fn = namespace.get("extract")
-
-                    if callable(extract_fn):
-                        raw_kv = _run_with_timeout(lambda: extract_fn(ws, merged_map, kv_list))
-                        kv_result = _validate_kv_result(raw_kv)
-                    else:
-                        errors.append("新生成的代码中未找到 extract(ws, merged_map, kv_list) 函数。")
-                except TimeoutError as e:
-                    errors.append(f"新生成的代码执行超时：{str(e)}")
-                except Exception:
-                    errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
+    # 按 MODE 前缀分类代码
+    table_codes = []
+    kv_codes = []
+    for code in new_code_list:
+        if code.startswith("# MODE: KV\n"):
+            kv_codes.append(code[len("# MODE: KV\n"):])
+        elif code.startswith("# MODE: TABLE\n"):
+            table_codes.append(code[len("# MODE: TABLE\n"):])
         else:
-            # 表格模式：执行新生成的代码
-            missed_subtables = cache_state.get("missed_subtables", [])
+            # 无前缀，按原有 extract_type 判断（向后兼容）
+            if extract_type == "kv":
+                kv_codes.append(code)
+            else:
+                table_codes.append(code)
 
-            if new_code and missed_subtables:
-                namespace = {
-                    "__builtins__": _SAFE_BUILTINS,
-                    "re": re, "math": math, "json": json,
-                    "sheet_structure": state.get("sheet_structure"),
-                    "subtable_titles": missed_subtables,
-                    "hints": hints,
-                }
+    # ── Track 2a: 执行 Table 代码 ──
+    for new_code in table_codes:
+        # 表格模式：执行新生成的代码
+        missed_subtables = cache_state.get("missed_subtables", [])
 
-                try:
-                    exec(compile(new_code, "<llm_generated>", "exec"), namespace)
-                    extract_fn = namespace.get("extract")
+        if new_code and missed_subtables:
+            namespace = {
+                "__builtins__": _SAFE_BUILTINS,
+                "re": re, "math": math, "json": json,
+                "sheet_structure": state.get("sheet_structure"),
+                "subtable_titles": missed_subtables,
+                "hints": hints,
+            }
 
-                    if callable(extract_fn):
-                        raw_llm = _run_with_timeout(lambda: extract_fn(ws, merged_map))
-                        llm_dict = _validate_result(raw_llm)
+            try:
+                exec(compile(new_code, "<llm_generated>", "exec"), namespace)
+                extract_fn = namespace.get("extract")
 
-                        # 将 LLM 跑出来的数据合并到最终结果中
-                        for title, data in llm_dict.items():
-                            final_raw_result[title] = data
-                            if title in entries:
-                                entries[title]["extracted_data"] = data
+                if callable(extract_fn):
+                    raw_llm = _run_with_timeout(lambda: extract_fn(ws, merged_map))
+                    llm_dict = _validate_result(raw_llm)
+
+                    # 将 LLM 跑出来的数据合并到最终结果中
+                    for title, data in llm_dict.items():
+                        final_raw_result[title] = data
+                        if title in entries:
+                            entries[title]["extracted_data"] = data
+                else:
+                    errors.append("新生成的代码中未找到 extract(ws, merged_map) 函数。")
+            except TimeoutError as e:
+                errors.append(f"新生成的代码执行超时：{str(e)}")
+            except Exception:
+                errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
+
+    # ── Track 2b: 执行 KV 代码 ──
+    for new_code in kv_codes:
+        if new_code and kv_list:
+            # 过滤掉 import 语句（沙盒已预置常用模块）
+            filtered_code_lines = []
+            for line in new_code.split('\n'):
+                stripped = line.strip()
+                if stripped.startswith('import ') or stripped.startswith('from '):
+                    continue
+                filtered_code_lines.append(line)
+            filtered_code = '\n'.join(filtered_code_lines)
+
+            namespace = {
+                "__builtins__": _SAFE_BUILTINS,
+                "re": re, "math": math, "json": json,
+                "openpyxl": openpyxl,
+                "kv_list": kv_list
+            }
+
+            try:
+                exec(compile(filtered_code, "<llm_generated>", "exec"), namespace)
+                extract_fn = namespace.get("extract")
+
+                if callable(extract_fn):
+                    # 检查是否有多子表 KV 场景
+                    kv_entries = {
+                        t: e for t, e in entries.items()
+                        if e.get("extract_mode") == "kv" or e.get("scope")
+                    }
+                    if kv_entries:
+                        # 多子表：每个子表用不同 scope 执行
+                        for title, entry in kv_entries.items():
+                            scope = entry.get("scope")
+                            raw_kv = _run_with_timeout(lambda s=scope: extract_fn(ws, merged_map, kv_list, s))
+                            kv_result[title] = _validate_kv_result(raw_kv)
                     else:
-                        errors.append("新生成的代码中未找到 extract(ws, merged_map) 函数。")
-                except TimeoutError as e:
-                    errors.append(f"新生成的代码执行超时：{str(e)}")
-                except Exception:
-                    errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
+                        # 全局 KV 场景：scope=None
+                        raw_kv = _run_with_timeout(lambda: extract_fn(ws, merged_map, kv_list, None))
+                        kv_result = _validate_kv_result(raw_kv)
+                else:
+                    errors.append("新生成的代码中未找到 extract(ws, merged_map, kv_list, scope=None) 函数。")
+            except TimeoutError as e:
+                errors.append(f"新生成的代码执行超时：{str(e)}")
+            except Exception:
+                errors.append(f"新生成的代码执行报错:\n{traceback.format_exc()}")
 
 
     # ==========================================================
@@ -251,7 +316,12 @@ def sandbox_node(state: AgentState) -> dict:
     # ==========================================================
     sandbox_error_str = "\n".join(errors) if errors else None
 
-    # KV 模式返回
+    # 检测混合模式（同时存在 table 和 KV 子表）
+    has_kv_entry = any(e.get("extract_mode") == "kv" for e in entries.values())
+    has_table_entry = any(e.get("extract_mode", "table") == "table" for e in entries.values())
+    is_mixed_mode = has_kv_entry and has_table_entry
+
+    # KV 模式返回（纯 KV）
     if extract_type == "kv":
         if not kv_result:
             if not sandbox_error_str:
@@ -265,6 +335,15 @@ def sandbox_node(state: AgentState) -> dict:
             "kv_result": kv_result,
             "sandbox_error": sandbox_error_str,
             "cache": cache_state
+        }
+
+    # 混合模式返回：同时返回 raw_result 和 kv_result
+    if is_mixed_mode:
+        return {
+            "raw_result": final_raw_result,
+            "kv_result": kv_result,
+            "sandbox_error": sandbox_error_str,
+            "cache": cache_state,
         }
 
     # 表格模式返回

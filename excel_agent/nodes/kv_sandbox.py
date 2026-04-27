@@ -2,9 +2,10 @@
 nodes/kv_sandbox.py — KV 模式专用沙盒执行节点
 
 职责：
-    1. 执行 KV 抽取代码：extract(ws, merged_map, kv_list) -> Dict[str, str]
-    2. 返回结果到 kv_result 字段
-    3. 不与其他模式共享状态更新
+    1. 执行 KV 抽取代码：extract(ws, merged_map, kv_list, scope=None) -> Dict[str, str]
+    2. 支持多子表同 Keys 场景（不同 scope 执行同一份代码）
+    3. 返回结果到 kv_result 字段
+    4. 不与其他模式共享状态更新
 """
 
 import re
@@ -79,7 +80,7 @@ def _validate_kv_result(result: Any) -> Dict[str, str]:
 
 
 def kv_sandbox_node(state: AgentState) -> dict:
-    """KV 模式专用沙盒节点（支持缓存代码）"""
+    """KV 模式专用沙盒节点（支持 scope 参数 + 多子表执行）"""
     config = state.get("config", {})
     excel_path = config.get("excel_path", "")
     sheet_name = config.get("sheet_name", "")
@@ -107,7 +108,7 @@ def kv_sandbox_node(state: AgentState) -> dict:
 
     merged_map = _build_merge_map(ws)
 
-    kv_result: Dict[str, str] = {}
+    kv_result: Dict[str, Any] = {}
     errors: List[str] = []
 
     # 执行代码（缓存代码或新生成的代码）
@@ -116,8 +117,17 @@ def kv_sandbox_node(state: AgentState) -> dict:
     else:
         code_list = state.get("generated_code", [])
 
+    # 检查是否有多子表 KV 场景（entries 中有 scope）
+    entries = cache_state.get("entries", {})
+    kv_entries = {
+        title: entry for title, entry in entries.items()
+        if entry.get("extract_mode") == "kv" or entry.get("scope")
+    }
+    is_multi_subtable = len(kv_entries) > 0
+
     for code in code_list:
-        if code and kv_list:
+        # if code and kv_list:
+        if code:
             # 过滤掉 import 语句（沙盒已预置常用模块）
             filtered_code_lines = []
             for line in code.split('\n'):
@@ -140,10 +150,18 @@ def kv_sandbox_node(state: AgentState) -> dict:
                 extract_fn = namespace.get("extract")
 
                 if callable(extract_fn):
-                    raw_kv = _run_with_timeout(lambda: extract_fn(ws, merged_map, kv_list))
-                    kv_result = _validate_kv_result(raw_kv)
+                    if is_multi_subtable:
+                        # 多子表场景：每个子表用不同 scope 执行
+                        for title, entry in kv_entries.items():
+                            scope = entry.get("scope")
+                            raw_kv = _run_with_timeout(lambda s=scope: extract_fn(ws, merged_map, kv_list, s))
+                            kv_result[title] = _validate_kv_result(raw_kv)
+                    else:
+                        # 全局 KV 场景：scope=None
+                        raw_kv = _run_with_timeout(lambda: extract_fn(ws, merged_map, kv_list, None))
+                        kv_result = _validate_kv_result(raw_kv)
                 else:
-                    errors.append("新生成的代码中未找到 extract(ws, merged_map, kv_list) 函数。")
+                    errors.append("新生成的代码中未找到 extract(ws, merged_map, kv_list, scope=None) 函数。")
             except TimeoutError as e:
                 errors.append(f"新生成的代码执行超时：{str(e)}")
             except Exception:

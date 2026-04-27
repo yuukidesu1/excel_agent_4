@@ -22,35 +22,46 @@ from excel_agent.cache_manager import l1_set, l2_set
 
 # ==================== KV 缓存 Key 构建 ====================
 
-def build_kv_cache_key(sheet_name: str, kv_list: list, max_row: int, max_col: int) -> str:
+def build_kv_cache_key(sheet_name: str, kv_list: list, max_row: int, max_col: int,
+                        subtable_title: str = None, scope: Dict = None) -> str:
     """
     构建 KV 模型缓存 Key
 
     设计原则：
     - Hash(kv_list + 模板结构特征)
     - 避免 Hash 碰撞：引入 sheet 维度特征
+    - 子表 KV 场景：增加 subtable_title + scope hash
     """
     key_str = "|".join(sorted(kv_list))
     structure_hint = f"{sheet_name}:{max_row}:{max_col}"
-    raw_key = f"{key_str}||{structure_hint}"
+    scope_tag = ""
+    if subtable_title:
+        scope_str = f"{scope.get('start_row', 0)}-{scope.get('end_row', 0)}-{scope.get('start_col', 0)}-{scope.get('end_col', 0)}" if scope else ""
+        scope_tag = f"|{subtable_title}|{hashlib.sha256(scope_str.encode()).hexdigest()[:8]}"
+    raw_key = f"{key_str}||{structure_hint}{scope_tag}"
     return hashlib.sha256(raw_key.encode()).hexdigest()[:16]
 
 
-def compute_kv_structure_signature(kv_list: list, sheet_structure: Dict[str, Any]) -> str:
+def compute_kv_structure_signature(kv_list: list, sheet_structure: Dict[str, Any],
+                                     subtable_title: str = None, scope: Dict = None) -> str:
     """
     计算 KV 结构指纹签名（用于 L2 缓存）
 
     签名应满足：
     - 相同的表格结构 → 相同的签名
     - 不同的表格结构 → 不同的签名
+    - 子表 KV 场景：增加 subtable_title 和 scope 信息
     """
     signature_data = {
         "kv_list_sorted": sorted(kv_list),
-        # "sheet_max_row": sheet_structure.get("max_row", 0),
-        # "sheet_max_col": sheet_structure.get("max_col", 0),
         "merge_cell_count": len(sheet_structure.get("merged_cells_info", [])),
-        "non_empty_cell_count": len(sheet_structure.get("non_empty_cells", []))
+        "non_empty_cell_count": len(sheet_structure.get("non_empty_cells", [])),
     }
+
+    if subtable_title:
+        signature_data["subtable_title"] = subtable_title
+        if scope:
+            signature_data["scope"] = scope
 
     serialized = json.dumps(signature_data, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
@@ -82,8 +93,22 @@ def kv_cache_save_node(state: AgentState) -> dict:
     # 构建缓存 Key
     max_row = sheet_structure.get("max_row", 0)
     max_col = sheet_structure.get("max_col", 0)
-    l1_key = build_kv_cache_key(sheet_name, kv_list, max_row, max_col)
-    structure_signature = compute_kv_structure_signature(kv_list, sheet_structure)
+
+    # 从缓存 entries 中提取子表信息（子表 KV 场景）
+    cache_state = state.get("cache", {})
+    entries = cache_state.get("entries", {})
+    subtable_title = None
+    scope = None
+    for title, entry in entries.items():
+        if entry.get("extract_mode") == "kv" or entry.get("scope"):
+            subtable_title = title
+            scope = entry.get("scope")
+            break
+
+    l1_key = build_kv_cache_key(sheet_name, kv_list, max_row, max_col,
+                                 subtable_title=subtable_title, scope=scope)
+    structure_signature = compute_kv_structure_signature(kv_list, sheet_structure,
+                                                          subtable_title=subtable_title, scope=scope)
 
     # 准备缓存数据
     cache_data = {

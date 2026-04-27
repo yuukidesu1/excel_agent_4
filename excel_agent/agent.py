@@ -99,6 +99,12 @@ from excel_agent.nodes.kv_quality import kv_quality_node, route_after_kv_quality
 from excel_agent.nodes.kv_cache_save import kv_cache_save_node
 from excel_agent.nodes.kv_sandbox import kv_sandbox_node
 
+# 多场景路由节点
+from excel_agent.nodes.kv_scene_router import kv_scene_router_node
+
+# 混合模式结果合并
+from excel_agent.nodes.merge_results import merge_results_node
+
 # 开启 LangSmith 追踪
 from dotenv import load_dotenv
 load_dotenv()
@@ -114,61 +120,127 @@ def _retry_node(state: AgentState) -> dict:
 def _route_after_retry(state: AgentState) -> str:
     """重试后路由：根据抽取类型决定回到哪个代码生成节点"""
     config = state.get("config", {})
-    # 通过 kv_list 判断是否是 KV 模式
     kv_list = config.get("kv_list")
     extract_type = config.get("extract_type", "table")
 
-    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or (extract_type and extract_type.lower() == "kv")
+    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or \
+                 (extract_type and extract_type.lower() == "kv")
 
     if is_kv_mode:
         return "kv_code_gen"
+
+    # 检查是否有 KV 子表需要重试
+    cache_state = state.get("cache", {})
+    entries = cache_state.get("entries", {})
+    has_kv_subtable = any(
+        entry.get("extract_mode") == "kv"
+        for entry in entries.values()
+    )
+
+    # 混合模式或纯 Table 模式：统一回到 code_gen（串行执行 code_gen → kv_code_gen）
+    if has_kv_subtable:
+        return "code_gen"
+
     return "code_gen"
 
 
 def _route_after_cache(state: AgentState) -> str:
-    """缓存查询后路由：根据缓存命中情况决定"""
+    """缓存查询后路由：根据缓存命中情况和场景判定决定"""
     config = state.get("config", {})
-    # 通过 kv_list 判断是否是 KV 模式（用户配置或 PSA 检测到 KV 布局后设置）
     kv_list = config.get("kv_list")
     extract_type = config.get("extract_type", "table")
     cache_state = state.get("cache", {})
 
-    # KV 模式判断：有 kv_list 或 extract_type="kv"
-    is_kv_mode = (kv_list is not None and len(kv_list) > 0) or (extract_type and extract_type.lower() == "kv")
-
-    if is_kv_mode:
-        # KV 缓存命中：直接走 sandbox 执行缓存代码
+    # 1. 全局 KV 模式：有 kv_list 或 extract_type="kv"
+    is_global_kv = (kv_list is not None and len(kv_list) > 0) or \
+                   (extract_type and extract_type.lower() == "kv")
+    if is_global_kv:
         if cache_state.get("hit", False) and not cache_state.get("missed", True):
             return "kv_sandbox"
-        # KV 缓存未命中：走 LLM 生成代码
         return "kv_code_gen"
 
-    # 表格模式：根据缓存命中情况决定
-    if cache_state.get("all_cached", False):
+    # 2. 检查 entries 中的 extract_mode（由 kv_scene_router 写入）
+    entries = cache_state.get("entries", {})
+    has_kv_subtable = False
+    has_table_subtable = False
+    has_missed_kv = False
+    has_missed_table = False
+
+    for title, entry in entries.items():
+        extract_mode = entry.get("extract_mode", "table")
+        is_missed = not entry.get("cache_hit", False)
+        if extract_mode == "kv":
+            has_kv_subtable = True
+            if is_missed:
+                has_missed_kv = True
+        else:
+            has_table_subtable = True
+            if is_missed:
+                has_missed_table = True
+
+    # 3. 纯 Table 模式
+    if has_table_subtable and not has_kv_subtable:
+        if cache_state.get("all_cached", False):
+            return "sandbox"
+        return "code_gen"
+
+    # 4. 混合模式（同时存在 KV 和 Table 子表）
+    # 改为串行执行：code_gen → kv_code_gen → sandbox
+    if has_kv_subtable and has_table_subtable:
+        # 有 table 未命中 → 先生成 table 代码
+        if has_missed_table:
+            return "code_gen"
+        # table 全缓存命中，但有 KV 未命中 → 直接生成 KV 代码
+        if has_missed_kv:
+            return "kv_code_gen"
+        # 全部缓存命中
         return "sandbox"
 
-    # 检查未命中子表的类型，决定走哪个 LLM 节点
-    missed = cache_state.get("missed_subtables", [])
+    # 5. 纯 KV 子表（非全局 KV 模式）
+    if has_kv_subtable:
+        if has_missed_kv:
+            return "kv_code_gen"
+        return "kv_sandbox"
+
+    # 6. Fallback
+    if cache_state.get("all_cached", False):
+        return "sandbox"
+    return "code_gen"
+
+
+def _route_after_code_gen(state: AgentState) -> str:
+    """code_gen 完成后判断是否还有 KV 代码需要生成（混合模式）"""
+    cache_state = state.get("cache", {})
     entries = cache_state.get("entries", {})
+    has_missed_kv = any(
+        entry.get("extract_mode") == "kv" and not entry.get("cache_hit", False)
+        for entry in entries.values()
+    )
+    if has_missed_kv:
+        return "kv_code_gen"
+    return "sandbox"
 
-    has_kv = False
-    has_regular = False
 
-    for title in missed:
-        entry = entries.get(title[0], {})
-        layout = entry.get("layout_type", "vertical")
-        if layout == "kv_table":
-            has_kv = True
-        else:
-            has_regular = True
+def _route_after_kv_code_gen(state: AgentState) -> str:
+    """kv_code_gen 完成后：混合模式 → sandbox，纯 KV → kv_sandbox"""
+    cache_state = state.get("cache", {})
+    entries = cache_state.get("entries", {})
+    has_kv = any(e.get("extract_mode") == "kv" for e in entries.values())
+    has_table = any(e.get("extract_mode", "table") != "kv" for e in entries.values())
+    if has_kv and has_table:
+        return "sandbox"
+    return "kv_sandbox"
 
-    # 根据类型决定路由
-    if has_kv and has_regular:
-        return ["code_gen", "kv_table_code_gen"]  # 混合情况，先走常规 code_gen，kv_table_code_gen 会并行处理
-    elif has_kv:
-        return "kv_table_code_gen"
-    else:
-        return "code_gen"
+
+def _route_after_sandbox(state: AgentState) -> str:
+    """sandbox 完成后判断走 restore 还是 merge_results（混合模式）"""
+    cache_state = state.get("cache", {})
+    entries = cache_state.get("entries", {})
+    has_kv = any(e.get("extract_mode") == "kv" for e in entries.values())
+    has_table = any(e.get("extract_mode", "table") != "kv" for e in entries.values())
+    if has_kv and has_table:
+        return "merge_results"
+    return "restore"
 
 
 def _route_after_quality(state: AgentState) -> str:
@@ -240,10 +312,17 @@ def build_agent():
     g.add_node("kv_quality", kv_quality_node)
     g.add_node("kv_cache_save", kv_cache_save_node)
 
+    # 注册混合模式结果合并节点
+    g.add_node("merge_results", merge_results_node)
+
+    # 注册多场景路由节点
+    g.add_node("kv_scene_router", kv_scene_router_node)
+
     # 2. 定义边 (数据流)
     g.set_entry_point("parse")
     g.add_edge("parse", "pre_structure_analyzer")
-    g.add_edge("pre_structure_analyzer", "cache_query")
+    g.add_edge("pre_structure_analyzer", "kv_scene_router")
+    g.add_edge("kv_scene_router", "cache_query")
 
     # 3. 缓存查询后路由：根据抽取类型和缓存命中情况决定
     g.add_conditional_edges("cache_query", _route_after_cache, {
@@ -253,8 +332,19 @@ def build_agent():
         "kv_sandbox": "kv_sandbox"
     })
 
-    g.add_edge("code_gen", "sandbox")
-    g.add_edge("sandbox", "restore")
+    g.add_conditional_edges("code_gen", _route_after_code_gen, {
+        "kv_code_gen": "kv_code_gen",
+        "sandbox": "sandbox",
+    })
+    g.add_conditional_edges("kv_code_gen", _route_after_kv_code_gen, {
+        "sandbox": "sandbox",
+        "kv_sandbox": "kv_sandbox",
+    })
+    g.add_conditional_edges("sandbox", _route_after_sandbox, {
+        "merge_results": "merge_results",
+        "restore": "restore",
+    })
+    g.add_edge("merge_results", "quality")
     g.add_edge("restore", "quality")
 
     # 4. 质量控制路由：决定重试还是去切分保存代码
@@ -267,8 +357,7 @@ def build_agent():
     g.add_edge("structure_analyzer", "cache_save")
     g.add_edge("cache_save", END)
 
-    # KV 模式边
-    g.add_edge("kv_code_gen", "kv_sandbox")
+    # KV 模式边 (kv_code_gen → kv_sandbox 已在上方的条件路由中处理)
     g.add_edge("kv_sandbox", "kv_quality")
 
     # KV 质量路由

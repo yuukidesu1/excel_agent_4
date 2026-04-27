@@ -319,4 +319,4 @@ def code_gen_node(state: AgentState) -> dict:
 #     return result
 # """
 
-    return {"generated_code": [code], "sandbox_error": None}
+    return {"generated_code": ["# MODE: TABLE\n" + code], "sandbox_error": None}

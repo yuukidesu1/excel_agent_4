@@ -70,6 +70,10 @@ class SubtableCacheEntry(TypedDict):
     # 这样后续节点就能把 cached_data 和 LLM 新提取的数据拼到一起！
     extracted_data: Optional[List[List[Any]]]
 
+    # 多场景路由字段
+    extract_mode: Optional[str]   # "kv" | "table"
+    scope: Optional[Dict[str, int]]  # {"start_row", "end_row", "start_col", "end_col"}
+
 
 class CacheState(TypedDict):
     """全局缓存状态管理器"""
@@ -105,7 +109,7 @@ class AgentState(TypedDict):
     # 代码执行后返回的原始二维数组 (含表头行)
 
     # ── KV 模式专用 ───────────────────────────────────────────────
-    kv_result: Optional[Dict[str, str]]  # KV 抽取结果 {key: value}
+    kv_result: Optional[Dict[str, Any]]  # KV 抽取结果，支持 {key: value} 或 {title: {key: value}}
 
     # ── restore_node 输出 ───────────────────────────────────────────────
     result:     Optional[Dict[str, List[List[str]]]]              # Optional[List[List[str]]] -> Optional[Dict[str, List[List[str]]]]

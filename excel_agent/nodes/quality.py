@@ -28,30 +28,66 @@ nodes/quality.py — 质量打分 + 条件路由
 def quality_node(state: AgentState) -> dict:
     result = state.get("result", {})
     errors = list(state.get("errors", []))
+
+    if not result:
+        return {"quality_score": 0.0, "errors": errors + ["[质量] 返回结果为空字典。"]}
+
+    # 分离 table 子表和 KV 子表
+    table_subtables = {t: d for t, d in result.items() if isinstance(d, list)}
+    kv_subtables = {t: d for t, d in result.items() if isinstance(d, dict)}
+
+    # 分别打分然后加权
+    table_score = _check_table_quality(state, table_subtables, errors) if table_subtables else 1.0
+    kv_score = _check_kv_quality(state, kv_subtables, errors) if kv_subtables else 1.0
+
+    # 加权平均（按子表数量加权）
+    table_count = len(table_subtables)
+    kv_count = len(kv_subtables)
+    total = table_count + kv_count
+
+    if total == 0:
+        combined = 1.0
+    elif table_count == 0:
+        combined = kv_score
+    elif kv_count == 0:
+        combined = table_score
+    else:
+        combined = (table_score * table_count + kv_score * kv_count) / total
+
+    return {
+        "quality_score": round(max(0.0, min(1.0, combined)), 3),
+        "errors": errors,
+    }
+
+
+def _check_table_quality(state: AgentState, table_subtables: dict, errors: list) -> float:
+    """检查 Table 格式子表的质量"""
     score = 1.0
 
     config = state.get("config", {})
     target_titles = (
         config.get("subtable_titles") or state.get("subtable_titles") or
         config.get("target_title") or state.get("target_title", [])
-    ) # 修复读取不到config的问题
+    )
     if isinstance(target_titles, str):
         target_titles = [target_titles]
     subtable_configs = config.get("subtable_configs") or state.get("subtable_configs")
 
-    if not result:
+    if not table_subtables:
         score -= 0.50
         errors.append("[质量] 返回结果为空字典。")
-        return {"quality_score": max(0.0, score), "errors": errors}
+        return max(0.0, score)
 
     empty_tables = 0
     total_data_cells = 0
     empty_data_cells = 0
     missing_cols_count = 0
-    expected_cols_total = 0  # 🚀 新增：用于按比例公平扣分
+    expected_cols_total = 0
 
     for title in target_titles:
-        table_data = result.get(title)
+        if title not in table_subtables:
+            continue
+        table_data = table_subtables[title]
 
         if not table_data or len(table_data) <= 1:
             empty_tables += 1
@@ -62,16 +98,14 @@ def quality_node(state: AgentState) -> dict:
         total_data_cells += sum(len(r) for r in data_rows)
         empty_data_cells += sum(1 for r in data_rows for v in r if not v)
 
-        # 🚀 获取当前子表的列过滤规则
         current_targets = None
         if isinstance(subtable_configs, dict):
             current_targets = subtable_configs.get(title)
         elif isinstance(subtable_configs, list):
             current_targets = subtable_configs
 
-        # 检查丢失的列
         if current_targets:
-            expected_cols_total += len(current_targets)  # 累加预期总列数
+            expected_cols_total += len(current_targets)
             if table_data[0]:
                 missing = [h for h in table_data[0] if str(h).startswith("[未找到]")]
                 missing_cols_count += len(missing)
@@ -79,7 +113,7 @@ def quality_node(state: AgentState) -> dict:
                     errors.append(f"[质量] 子表 '{title}' 中以下列未找到：{missing}")
 
     if empty_tables > 0:
-        score -= (0.30 * (empty_tables / len(target_titles)))
+        score -= (0.30 * (empty_tables / max(1, len(target_titles))))
 
     if total_data_cells > 0:
         rate = empty_data_cells / total_data_cells
@@ -87,14 +121,44 @@ def quality_node(state: AgentState) -> dict:
             score -= 0.10
             errors.append(f"[质量] 总体数据空值率过高：{rate:.0%}。")
 
-    # 🚀 修改扣分逻辑：基于预期总列数扣分
     if expected_cols_total > 0 and missing_cols_count > 0:
         score -= 0.50 * (missing_cols_count / expected_cols_total)
 
-    return {
-        "quality_score": round(max(0.0, min(1.0, score)), 3),
-        "errors": errors,
-    }
+    return max(0.0, min(1.0, score))
+
+
+def _check_kv_quality(state: AgentState, kv_subtables: dict, errors: list) -> float:
+    """检查 KV 格式子表的质量"""
+    score = 1.0
+    config = state.get("config", {})
+    kv_list = config.get("kv_list", [])
+
+    total_found = 0
+    total_keys = 0
+
+    for title, kv_data in kv_subtables.items():
+        if not kv_data:
+            errors.append(f"[质量] KV 子表 '{title}' 结果为空。")
+            score -= 0.30
+            continue
+
+        found = sum(1 for v in kv_data.values() if v)
+        total = len(kv_data)
+        total_found += found
+        total_keys += total
+
+        if total > 0 and found / total < 0.5:
+            missing_keys = [k for k, v in kv_data.items() if not v]
+            errors.append(f"[质量] KV 子表 '{title}' Key 发现率过低：{found}/{total}，缺失：{missing_keys}")
+
+    if total_keys > 0:
+        discovery_rate = total_found / total_keys
+        if discovery_rate < 0.5:
+            score -= 0.50
+        elif discovery_rate < 1.0:
+            score -= 0.10 * (1 - discovery_rate)
+
+    return max(0.0, min(1.0, score))
 
 
 def route(state: AgentState) -> str:

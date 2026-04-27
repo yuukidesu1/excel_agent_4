@@ -80,42 +80,67 @@ def main(config_file: str):
     is_kv_mode = (extract_type and extract_type.lower() == "kv") or (result.get("kv_result") is not None)
 
     if result.get("data") or result.get("kv_result"):
-        # KV 模式优先使用 kv_result
-        extracted_data = result.get("kv_result") if is_kv_mode else result.get("data")
-
-        # 1. 如果返回的是字典（多子表或 KV 模式）
-        if isinstance(extracted_data, dict):
-            if is_kv_mode:
-                # KV 模式：{key: value} 格式
-                print("\n── KV 抽取结果 ──────────────────────────────")
-                print(f" 📊 共抽取 {len(extracted_data)} 个键值对")
-                for key, value in extracted_data.items():
-                    print(f"   • {key}: {value[:50] if value and len(value) > 50 else value}")
-                print("────────────────────────────────────────────────")
-            else:
-                # 表格模式：多子表
-                print("\n── 多子表抽取结果汇总 ──────────────────────────────")
-                for table_name, rows in extracted_data.items():
-                    if rows and isinstance(rows, list):
-                        data_rows = len(rows) - 1 if len(rows) > 0 else 0
-                        cols = len(rows[0]) if data_rows >= 0 and isinstance(rows[0], list) else 0
-                        print(f" 📊 [{table_name}]: {data_rows} 行数据 × {cols} 列")
+        # 检测混合模式（data 中同时包含 table 和 KV 格式子表）
+        data = result.get("data")
+        if isinstance(data, dict):
+            has_table = any(isinstance(v, list) for v in data.values())
+            has_kv = any(isinstance(v, dict) for v in data.values())
+            if has_table and has_kv:
+                # 混合模式输出
+                print("\n── 混合模式抽取结果 ──────────────────────────")
+                print(f" 📊 Table 子表：")
+                for title, rows in data.items():
+                    if isinstance(rows, list) and rows:
+                        data_rows = len(rows) - 1
+                        cols = len(rows[0]) if isinstance(rows[0], list) else 0
+                        print(f"   [{title}]: {data_rows} 行 × {cols} 列")
                     else:
-                        print(f" ⚠ [{table_name}]: 提取结果为空或格式不符")
-                print("──────────────────────────────────────────────────")
-
-        # 2. 如果返回的是二维列表（单个表格，向下兼容）
-        elif isinstance(extracted_data, list):
-            rows = extracted_data
-            if rows:
-                data_rows = len(rows) - 1 if len(rows) > 0 else 0
-                cols = len(rows[0]) if isinstance(rows[0], list) else 0
-                print(f"\n── 单表结果：{data_rows} 行数据 × {cols} 列 ──────────────")
+                        print(f"   [{title}]: 空")
+                print(f" 📊 KV 子表：")
+                for title, kv_data in data.items():
+                    if isinstance(kv_data, dict):
+                        found = sum(1 for v in kv_data.values() if v)
+                        print(f"   [{title}]: {found}/{len(kv_data)} keys")
+                print("────────────────────────────────────────────────")
+                print(json.dumps(data, ensure_ascii=False, indent=2))
             else:
-                print("\n── 结果：空列表 ──────────────")
+                # 非混合模式：走原有逻辑
+                # KV 模式优先使用 kv_result
+                extracted_data = result.get("kv_result") if is_kv_mode else result.get("data")
 
-        # 无论哪种格式，都打印完整的 JSON 数据供核对
-        print(json.dumps(extracted_data, ensure_ascii=False, indent=2))
+                # 1. 如果返回的是字典（多子表或 KV 模式）
+                if isinstance(extracted_data, dict):
+                    if is_kv_mode:
+                        # KV 模式：{key: value} 格式
+                        print("\n── KV 抽取结果 ──────────────────────────────")
+                        print(f" 📊 共抽取 {len(extracted_data)} 个键值对")
+                        for key, value in extracted_data.items():
+                            print(f"   • {key}: {value[:50] if value and len(value) > 50 else value}")
+                        print("────────────────────────────────────────────────")
+                    else:
+                        # 表格模式：多子表
+                        print("\n── 多子表抽取结果汇总 ──────────────────────────────")
+                        for table_name, rows in extracted_data.items():
+                            if rows and isinstance(rows, list):
+                                data_rows = len(rows) - 1 if len(rows) > 0 else 0
+                                cols = len(rows[0]) if data_rows >= 0 and isinstance(rows[0], list) else 0
+                                print(f" 📊 [{table_name}]: {data_rows} 行数据 × {cols} 列")
+                            else:
+                                print(f" ⚠ [{table_name}]: 提取结果为空或格式不符")
+                        print("──────────────────────────────────────────────────")
+
+                # 2. 如果返回的是二维列表（单个表格，向下兼容）
+                elif isinstance(extracted_data, list):
+                    rows = extracted_data
+                    if rows:
+                        data_rows = len(rows) - 1 if len(rows) > 0 else 0
+                        cols = len(rows[0]) if isinstance(rows[0], list) else 0
+                        print(f"\n── 单表结果：{data_rows} 行数据 × {cols} 列 ──────────────")
+                    else:
+                        print("\n── 结果：空列表 ──────────────")
+
+                # 无论哪种格式，都打印完整的 JSON 数据供核对
+                print(json.dumps(extracted_data, ensure_ascii=False, indent=2))
     else:
         print("\n❌ 无数据输出")
 
@@ -128,7 +153,7 @@ if __name__ == "__main__":
         type=str,
         # default="./configs/generalization_test/Power_56A0NNC_kv_table.yaml",
         # default="./configs/TSSR_senario_TEST.yaml",
-        # default="./configs/generalization_test/CONFIGURATION.yaml",
+        default="./configs/generalization_test/CONFIGURATION.yaml",
         # default="./configs/generalization_test/MW_56A0DS6.yaml",
         # default="./configs/generalization_test/WL_56A0DS6.yaml",
         # default="./configs/test/test_horizontal.yaml",
@@ -137,8 +162,9 @@ if __name__ == "__main__":
         # default="./configs/test/test_cross.yaml",
         # default="./configs/test/TEST_WL_56A0DS6_mix.yaml",
         # default="./configs/kv_test/kv_list.yaml",
-        default="./configs/generalization_test/CONFIGURATION.yaml",
+        # default="./configs/generalization_test/CONFIGURATION.yaml",
         # default="./configs/kv_test/kv_table_test.yaml",
+        # default="./configs/kv_route_test.yaml",
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )
     args = parser.parse_args()

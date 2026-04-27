@@ -148,6 +148,17 @@ def _kv_cache_query(state: AgentState) -> dict:
     max_row = sheet_structure.get("max_row", 0)
     max_col = sheet_structure.get("max_col", 0)
 
+    # 从缓存 entries 中提取子表信息（子表 KV 场景）
+    cache_state = state.get("cache", {})
+    entries = cache_state.get("entries", {})
+    subtable_title = None
+    scope = None
+    for title, entry in entries.items():
+        if entry.get("extract_mode") == "kv" or entry.get("scope"):
+            subtable_title = title
+            scope = entry.get("scope")
+            break
+
     # ==================== 1. 查询 L1 缓存（完全匹配）====================
     l1_data = l1_get(
         excel_path=excel_path,
@@ -158,7 +169,9 @@ def _kv_cache_query(state: AgentState) -> dict:
     if l1_data:
         # L1 命中：直接返回缓存代码
         code = l1_data.get("generated_code", "")
-        print(f"✅ KV 缓存 L1 命中：key={build_kv_cache_key(sheet_name, kv_list, max_row, max_col)}")
+        l1_key = build_kv_cache_key(sheet_name, kv_list, max_row, max_col,
+                                     subtable_title=subtable_title, scope=scope)
+        print(f"✅ KV 缓存 L1 命中：key={l1_key}")
         return {
             "cache": {
                 "hit": True,
@@ -170,7 +183,8 @@ def _kv_cache_query(state: AgentState) -> dict:
         }
 
     # ==================== 2. 查询 L2 缓存（结构匹配）====================
-    structure_signature = compute_kv_structure_signature(kv_list, sheet_structure)
+    structure_signature = compute_kv_structure_signature(kv_list, sheet_structure,
+                                                          subtable_title=subtable_title, scope=scope)
 
     if structure_signature:
         l2_data = l2_get(
@@ -179,7 +193,7 @@ def _kv_cache_query(state: AgentState) -> dict:
         )
 
         if l2_data:
-            # L2 命中：返回缓存代码
+            # L2 命中：返回缓存代码（执行时用当前 scope 替换，无需代码修改）
             code = l2_data.get("generated_code", "")
             print(f"✅ KV 缓存 L2 命中：signature={structure_signature}")
             return {
