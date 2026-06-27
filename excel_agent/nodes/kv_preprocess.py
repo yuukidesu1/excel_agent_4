@@ -5,7 +5,7 @@ import re
 import hashlib
 import json
 
-from Excel_Agent.excel_agent.state import AgentState
+from excel_agent.state import AgentState
 
 
 def _find_sheet(wb, requested: str) -> str:
@@ -27,19 +27,13 @@ def _generate_kv_signature(bboxes_dict, merged_cells_info):
     :return:
     """
 
-    # 1. 构建宏观拓扑序列 (提取所有合法包围和的相对顺序特征)
-    # 不记录绝对的 R（行号），只记录 C（列号宽度）和它们出现的先后顺序
     topology_sequence = []
 
-    # 将 bboxes 按照从上到下的顺序排列
-    # 过滤掉 fallback
     valid_boxes = {k: v for k, v in bboxes_dict.items() if k != "fallback"}
     sorted_items = sorted(valid_boxes.items(), key=lambda item: item[1]["min_r"])
 
     for key, box in sorted_items:
-        # 特征：包围盒跨越了多少列？这影响横向/纵向代码逻辑
         width_span = box["max_c"] - box["min_c"]
-        # 特征：这是一个多行的区域表头，还是单行的全局 Key？
         height_span = box["max_r"] - box["min_r"]
 
         topology_sequence.append({
@@ -48,25 +42,20 @@ def _generate_kv_signature(bboxes_dict, merged_cells_info):
             "is_multi_row": height_span > 0
         })
 
-    # 2. 构建合并单元格特征 (防格式突变)
-    # 取前 5 个有意义的合并单元格的跨度，作为模板验证的防伪标签
     merge_features = []
-    # 从 "R5C1~R10C2:"[空合并]"" 这样的字符串中提取行列跨度
-    import re
     for m_str in merged_cells_info[:5]:
-        if m_str == "...": continue
+        if m_str == "...":
+            continue
         match = re.search(r'R(\d+)C(\d+)~R(\d+)C(\d+)', m_str)
         if match:
             min_r, min_c, max_r, max_c = map(int, match.groups())
             merge_features.append(f"W{max_c - min_c}_H{max_r - min_r}")
 
-    # 3. 组装最终指纹载体
     fingerprint_data = {
         "topology": topology_sequence,
         "merge_layout": merge_features
     }
 
-    # 4. SHA256 哈希计算
     signature = hashlib.sha256(
         json.dumps(fingerprint_data, sort_keys=True).encode('utf-8')
     ).hexdigest()[:16]
@@ -79,20 +68,17 @@ def kv_preprocess_node(state: AgentState) -> dict:
     sheet_name_req = config.get("sheet_name")
     kv_list = config.get("kv_list", [])
 
-    # 1. 拆解：使用字典映射保存原始大小写
-    global_keywords_map = {}  # {小写: 原始大小写}
-    local_headers_map = {}  # {小写: 原始大小写}
+    global_keywords_map = {}
+    local_headers_map = {}
     region_paths_set = set()
 
     for key in kv_list:
         if "||" in key:
             parts = [p.strip() for p in key.split("||")]
             region_paths_set.add(tuple(parts[:-1]))
-            # 局部表头：只取最左边的作为严格雷达词
             original_header = parts[0]
             local_headers_map[original_header.lower()] = original_header
         else:
-            # 全局 KV：作为模糊雷达词
             original_global = key.strip()
             global_keywords_map[original_global.lower()] = original_global
 
@@ -126,9 +112,6 @@ def kv_preprocess_node(state: AgentState) -> dict:
                 return False
         return True
 
-    # =====================================================================
-    # 【核心压缩 Step 1：包围盒探测雷达 (区分严格与模糊)】
-    # =====================================================================
     bboxes = []
     named_bboxes = {}
 
@@ -143,9 +126,6 @@ def kv_preprocess_node(state: AgentState) -> dict:
 
             clean_val_lower = str(cell_val).strip().lower()
 
-            # ---------------------------------------------------------
-            # 情况 1：命中全局 KV (开启 difflib 滑动窗口容错)
-            # ---------------------------------------------------------
             matched_gw_lower = None
             for gw in global_keywords_map:
                 if global_keywords_map[gw] in named_bboxes:
@@ -178,9 +158,6 @@ def kv_preprocess_node(state: AgentState) -> dict:
                     bboxes.append(box)
                     named_bboxes[original_header_key] = box
 
-            # ---------------------------------------------------------
-            # 情况 2：命中局部 KV 表头 (绝对严格匹配，绝不容错)
-            # ---------------------------------------------------------
             matched_lh_lower = next((lh for lh in local_headers_map if lh == clean_val_lower), None)
             if matched_lh_lower:
                 m_info = merged_map.get((r, c))
@@ -196,17 +173,13 @@ def kv_preprocess_node(state: AgentState) -> dict:
 
                 bboxes.append(box)
                 original_local_header = local_headers_map[matched_lh_lower]
-                named_bboxes[original_local_header] = box  # 绑定原始局部表头 Key
+                named_bboxes[original_local_header] = box
 
-    # 兜底
     if not bboxes:
         box = {"min_r": 1, "max_r": min(30, max_row), "min_c": 1, "max_c": max_col}
         bboxes.append(box)
         named_bboxes["fallback"] = box
 
-    # =====================================================================
-    # 【核心压缩 Step 1.5：紧凑化包围盒 (Tight Fit Algorithm)】
-    # =====================================================================
     for b in bboxes:
         actual_max_r = b["min_r"]
         actual_max_c = b["min_c"]
@@ -232,9 +205,6 @@ def kv_preprocess_node(state: AgentState) -> dict:
                 return True
         return False
 
-    # =====================================================================
-    # 【核心压缩 Step 2：收集与压缩 合并单元格】
-    # =====================================================================
     merged_cells_info = []
     merged_ranges.sort(key=lambda m: (m.min_row, m.min_col))
     last_m_row = -1
@@ -248,9 +218,6 @@ def kv_preprocess_node(state: AgentState) -> dict:
             merged_cells_info.append(f"R{m.min_row}C{m.min_col}~R{m.max_row}C{m.max_col}:\"{display_val}\"")
             last_m_row = max(last_m_row, m.max_row)
 
-    # =====================================================================
-    # 【核心压缩 Step 3：收集与压缩 详细内容单元格】
-    # =====================================================================
     sample_cells = []
     last_r = -1
     for r in range(1, max_row + 1):
@@ -276,7 +243,6 @@ def kv_preprocess_node(state: AgentState) -> dict:
 
     sample_cells = sample_cells[:300]
 
-    # 获取结构特征
     signature, fingerprint_data = _generate_kv_signature(named_bboxes, merged_cells_info)
 
     return {
@@ -297,41 +263,3 @@ def kv_preprocess_node(state: AgentState) -> dict:
             }
         }
     }
-
-
-# if __name__ == "__main__":
-#     # 模拟环境测试
-#     test_excel_path = r"D:\Projects\y00957025\Excel_Agent\ALX3090-WL-DBS-TDD2600-EXP-ALX3090-14-Region_B-Range_3-ONOFF-1_TSSR_2022 WL Site Survey Template(ALX3090) 标注样例.xlsx"
-#     # test_excel_path = r"D:\Projects\y00957025\Excel_Agent\111017.xlsx"
-#     # test_sheet_name = "Public"
-#     test_sheet_name = "RF Data"
-#
-#     mock_state = {
-#         "config": {
-#             "excel_path": test_excel_path,
-#             "sheet_name": test_sheet_name,
-#             "kv_list": [
-#                 "Cell C||Data||Antenna type /  model",
-#                 "Cell C||Data||Shared With",
-#                 "Cell C||Antenna Height (From Ground)",
-#                 "Cell B'||Data||Antenna Sharing (Yes/No)",
-#                 "Cell B'||Data||Shared With",
-#                 "Cell B'||Data||Azmuith",
-#                 "Cell B'||Antenna Height (From Ground)",
-#                 "Cell B'||No Of Antenna Port ( total )",
-#                 "Cell B'||RRU type/model (Jumper) 1800",
-#                 "Cell B'||Data||NO of Free Feeders "
-#             ]
-#             # "kv_list": [
-#             #     "Site Name",
-#             #     "Site ID",
-#             #     "ET Region",
-#             #     "Latitude (N)"
-#             # ]
-#         }
-#     }
-#
-#     print("\n🚀 开始执行 kv_preprocess_node...")
-#     result = kv_preprocess_node(mock_state)
-#     print("\n📊 节点输出结果：")
-#     print(json.dumps(result, ensure_ascii=False, indent=4))

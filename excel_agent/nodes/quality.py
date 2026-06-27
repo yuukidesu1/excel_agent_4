@@ -11,7 +11,7 @@ nodes/quality.py — 质量打分 + 条件路由
 重试上限：MAX_RETRY = 3（超过后强制输出现有结果）
 """
 
-from Excel_Agent.excel_agent.state import AgentState
+from excel_agent.state import AgentState
 
 MAX_RETRY         = 3
 QUALITY_THRESHOLD = 0.75

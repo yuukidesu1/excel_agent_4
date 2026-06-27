@@ -2,18 +2,18 @@ from typing import Optional, List, Dict, Any, AsyncGenerator, Union
 
 from langgraph.graph import StateGraph, END
 
-from Excel_Agent.excel_agent.state import AgentState, SubtableConfig
-from Excel_Agent.excel_agent.nodes.parse import parse_node
-from Excel_Agent.excel_agent.nodes.kv_preprocess import kv_preprocess_node
-from Excel_Agent.excel_agent.nodes.kv_codegen import kv_codegen_node
-from Excel_Agent.excel_agent.nodes.pre_structure_analyzer import pre_structure_analyzer_node
-from Excel_Agent.excel_agent.nodes.code_gen import code_gen_node
-from Excel_Agent.excel_agent.nodes.sandbox import sandbox_node
-from Excel_Agent.excel_agent.nodes.restore import restore_node
-from Excel_Agent.excel_agent.nodes.quality import quality_node, route, QUALITY_THRESHOLD
-from Excel_Agent.excel_agent.nodes.structure_analyzer import structure_analyzer_node
-from Excel_Agent.excel_agent.nodes.cache_query import cache_query_node
-from Excel_Agent.excel_agent.nodes.cache_save import cache_save_node
+from excel_agent.state import AgentState, SubtableConfig
+from excel_agent.nodes.parse import parse_node
+from excel_agent.nodes.kv_preprocess import kv_preprocess_node
+from excel_agent.nodes.kv_codegen import kv_codegen_node
+from excel_agent.nodes.pre_structureanalyzer import pre_structure_analyzer_node
+from excel_agent.nodes.code_gen import code_gen_node
+from excel_agent.nodes.sandbox import sandbox_node
+from excel_agent.nodes.restore import restore_node
+from excel_agent.nodes.quality import quality_node, QUALITY_THRESHOLD
+from excel_agent.nodes.structure_analyzer import structure_analyzer_node
+from excel_agent.nodes.cache_query import cache_query_node
+from excel_agent.nodes.cache_save import cache_save_node
 
 
 # ========================================== #
@@ -47,7 +47,6 @@ def _make_initial(
         "retry_count": 0,
         "errors": [],
         "sandbox_error": None,
-        # 缓存相关
         "cache": {
             "entries": {},
             "all_cached": False,
@@ -68,7 +67,7 @@ def _retry_node(state: AgentState) -> dict:
 
 
 def _route_after_cache(state: AgentState) -> str:
-    """缓存查询后路由：全量命中→跳过LLM直接sandbox，部分/全未命中→code_gen"""
+    """缓存查询后路由。"""
     cache_state = state.get("cache", {})
     config = state.get("config", {})
     is_kv_model = True if config.get("kv_list") else False
@@ -98,18 +97,16 @@ def _route_after_quality(state: AgentState) -> str:
     cache_state = state.get("cache", {})
     is_kv_mode = bool(state.get("config").get("kv_list"))
 
-    # 如果所有子表都命中了缓存，直接结束，不走后续的保存流
     if cache_state.get("all_cached", False):
         return "end"
 
-    # 以下是有 LLM 新生成代码的情况
     if state["quality_score"] >= QUALITY_THRESHOLD:
         if is_kv_mode:
             return "cache_save"
         return "analyze"
 
     if state.get("retry_count", 0) >= 3:
-        return "analyze"  # 超过重试上限，死马当活马医，保存备用
+        return "analyze"
 
     return "retry"
 
@@ -121,9 +118,6 @@ def _route_after_quality(state: AgentState) -> str:
 def build_agent():
     g = StateGraph(AgentState)
 
-    # ---------------------------
-    # 1. 注册所有节点
-    # ---------------------------
     g.add_node("parse", parse_node)
     g.add_node("kv_preprocess", kv_preprocess_node)
     g.add_node("kv_codegen", kv_codegen_node)
@@ -137,11 +131,8 @@ def build_agent():
     g.add_node("cache_save", cache_save_node)
     g.add_node("retry", _retry_node)
 
-    # ---------------------------
-    # 2. 定义边与入口/前置路由
-    # ---------------------------
     def _route_at_entry(state: AgentState) -> str:
-        """入口路由：有 kv_list 则直接进 kv_preprocess，否则进 parse"""
+        """入口路由。"""
         config = state.get("config", {})
         if config.get("kv_list"):
             return "kv_preprocess"
@@ -153,7 +144,6 @@ def build_agent():
     })
 
     def _route_after_parse(state: AgentState) -> str:
-        """parse 后路由：继续到 pre_structure_analyzer"""
         return "pre_structure_analyzer"
 
     g.add_conditional_edges("parse", _route_after_parse, {
@@ -161,7 +151,6 @@ def build_agent():
     })
 
     def _route_after_kv_preprocess(state: AgentState) -> str:
-        """路由至 cache_query（有 errors 则跳过整个流程）"""
         if state.get("errors"):
             return "end"
         return "cache_query"
@@ -174,9 +163,6 @@ def build_agent():
     g.add_edge("kv_codegen", "sandbox")
     g.add_edge("pre_structure_analyzer", "cache_query")
 
-    # ---------------------------
-    # 3. 缓存与沙盒路由
-    # ---------------------------
     g.add_conditional_edges("cache_query", _route_after_cache, {
         "sandbox": "sandbox",
         "code_gen": "code_gen",
@@ -192,9 +178,6 @@ def build_agent():
 
     g.add_edge("restore", "quality")
 
-    # ---------------------------
-    # 4. 质量控制路由与保存
-    # ---------------------------
     g.add_conditional_edges("quality", _route_after_quality, {
         "analyze": "structure_analyzer",
         "retry": "retry",
@@ -205,9 +188,6 @@ def build_agent():
     g.add_edge("structure_analyzer", "cache_save")
     g.add_edge("cache_save", END)
 
-    # ---------------------------
-    # 5. 重试逻辑
-    # ---------------------------
     g.add_edge("retry", "code_gen")
 
     return g.compile()
@@ -239,7 +219,6 @@ def run_extraction(
         "errors": final["errors"],
         "generated_code": final.get("generated_code", ""),
         "sandbox_error": final.get("sandbox_error"),
-        # 缓存信息
         "all_cached": final.get("cache", {}).get("all_cached", False),
         "partial_cached": final.get("cache", {}).get("partial_cached", False),
     }

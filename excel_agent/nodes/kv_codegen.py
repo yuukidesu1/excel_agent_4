@@ -12,19 +12,12 @@ import re
 import json
 import ast
 import requests
-from langchain_anthropic import ChatAnthropic
 from langchain_core.runnables import RunnableLambda
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from Excel_Agent.excel_agent.state import AgentState
-
-# =====================================================================
-# 【系统提示词占位】
-# 请在此处填入我们上一轮确认好的全新版 _KV_SYSTEM_PROMPT
-# (包含扁平化字典、find_anchor 动态定位、看网格计算偏移量等规则)
-# =====================================================================
+from excel_agent.state import AgentState
 _KV_SYSTEM_PROMPT = """\
 你是顶尖的 Excel KV（键值对）数据抽取专家。请根据传入的结构视图，编写 Python 代码抽取离散的 KV 数据。
 
@@ -220,8 +213,7 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
 
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL") or "http://141.246.3.57:20004/v1"
-    model = os.getenv("LLM_MODEL2", "Qwen-V3_6-27B")  # 根据你的实际模型切换
-    # model = os.getenv("LLM_MODEL2", "minimax25")  # 根据你的实际模型切换
+    model = os.getenv("LLM_MODEL2", "Qwen-V3_6-27B")
     header_name = os.getenv("Authorization")
     extra_body_params = {
         "thinking": False,
@@ -248,11 +240,9 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
 def _get_anthropic_llm(dynamic_token: str = None):
     _init_env()
 
-    # 从环境变量获取所需配置
-    # 注意：在部分系统中带有连字符(-)的环境变量名可能存在读取问题，此处做了一个大写/下划线的兼容兜底
     api_key = os.getenv("x-api-key") or os.getenv("X_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
     base_url = os.getenv("ANTHROPIC_BASE_URL") or None
-    model = os.getenv("LLM_MODEL1", "MiniMax-M2.7")  # 默认给一个 Claude 模型
+    model = os.getenv("LLM_MODEL1", "MiniMax-M2.7")
     header_name = os.getenv("CUSTOM_HEADER_NAME")
 
     custom_headers = {}
@@ -262,27 +252,26 @@ def _get_anthropic_llm(dynamic_token: str = None):
     if not api_key:
         raise ValueError("未找到 API Key (x-api-key)，请检查 .env 文件。")
 
-    # 实例化并返回 ChatAnthropic
+    from langchain_anthropic import ChatAnthropic
+
     return ChatAnthropic(
         model_name=model,
-        temperature=0,  # 写代码必须保持 0 的温度以保证确定性
+        temperature=0,
         api_key=api_key,
-        anthropic_api_url=base_url,  # ChatAnthropic 支持的修改 Base URL 的参数
+        anthropic_api_url=base_url,
         default_headers=custom_headers,
         streaming=False
     )
 
 
 def _get_llm_postman(dynamic_token: str = None):
-    # 1. 环境与代理清理
-    _init_env()  # 假设你已经抽离了这个函数
+    _init_env()
 
     api_key = os.getenv("x-api-key") or os.getenv("X_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
 
-    # URL 处理：如果是纯正的 Anthropic 协议，后缀通常是 /v1/messages
     base_url = os.getenv("ANTHROPIC_BASE_URL", "").rstrip("/")
     if not base_url.endswith("/messages"):
-        base_url += "/v1/messages"  # 自动补齐 Anthropic 标准路由
+        base_url += "/v1/messages"
 
     model = os.getenv("LLM_MODEL1", "MiniMax-M2.7")
     header_name = os.getenv("CUSTOM_HEADER_NAME")
@@ -290,7 +279,6 @@ def _get_llm_postman(dynamic_token: str = None):
     if not api_key:
         raise ValueError("未找到 API Key，请检查 .env 文件。")
 
-    # 2. 构造闭包函数
     def postman_caller(prompt_input) -> AIMessage:
         messages_payload = []
         system_prompt = ""  # 用于存放剥离出来的顶层 System Prompt
@@ -299,7 +287,6 @@ def _get_llm_postman(dynamic_token: str = None):
             messages_payload.append({"role": "user", "content": prompt_input})
         elif isinstance(prompt_input, list):
             for msg in prompt_input:
-                # 关键改动 1：把 System 摘出来
                 if isinstance(msg, SystemMessage):
                     system_prompt += msg.content + "\n"
                 elif isinstance(msg, HumanMessage):
@@ -312,7 +299,6 @@ def _get_llm_postman(dynamic_token: str = None):
                     else:
                         messages_payload.append(msg)
 
-        # 关键改动 2：Anthropic 专属 Headers
         headers = {
             "x-api-key": f"{api_key}",
             "Content-Type": "application/json"
@@ -320,35 +306,28 @@ def _get_llm_postman(dynamic_token: str = None):
         if header_name and dynamic_token:
             headers[header_name] = dynamic_token
 
-        # 关键改动 3：组装标准的 Anthropic Body
         payload = {
             "model": model,
-            # "max_tokens": 8192,  # Anthropic 协议必填参数，不填会报错
             "temperature": 0.0,
             "stream": False,
             "messages": messages_payload
         }
 
-        # 如果存在 system prompt，将其作为顶层参数传入
         if system_prompt.strip():
             payload["system"] = system_prompt.strip()
 
-        # 3. 发送纯粹的 HTTP 请求
         try:
             response = requests.post(base_url, headers=headers, json=payload, timeout=600)
             response.raise_for_status()
 
             response_json = response.json()
 
-            # 关键改动 4：解析 Anthropic 格式的返回值
-            # Anthropic 成功时的结构为：{"content": [{"text": "返回的文本", "type": "text"}], ...}
             content_list = response_json.get("content", [])
             if content_list and isinstance(content_list, list):
                 content = content_list[0].get("text", "")
             else:
-                content = ""  # 兜底
+                content = ""
 
-            # 4. 包装回 LangChain 的 AIMessage
             return AIMessage(
                 content=content,
                 response_metadata={
@@ -370,8 +349,6 @@ def _get_llm_postman_openai(dynamic_token: str = None):
     api_key = os.getenv("OPENAI_API_KEY")
 
     base_url = os.getenv("OPENAI_BASE_URL", "").rstrip("/")
-    # if not base_url.endswith("/chat/completions"):
-    #     base_url += "/v1"
     base_url += "/chat/completions"
 
     model = os.getenv("LLM_MODEL114514", "Qwen-V3_6-27B")
@@ -414,7 +391,6 @@ def _get_llm_postman_openai(dynamic_token: str = None):
         try:
             response = requests.post(base_url,
                                      headers=headers,
-                                     # json=payload,
                                      data=payload_bytes,
                                      timeout=600)
             response.raise_for_status()
@@ -444,34 +420,21 @@ def _get_llm_postman_openai(dynamic_token: str = None):
 def _extract_code(raw: str) -> str:
     """从 LLM 输出中安全提取最后一个 Python 代码块，并清理所有 import 语句"""
 
-    # 1. 提取最后一个 Python 代码块
-    # 使用 re.findall 获取所有匹配项，忽略大小写
     matches = re.findall(r"```python\s*([\s\S]*?)```", raw, re.IGNORECASE)
 
     if matches:
-        # 取最后一个匹配项
         code = matches[-1].strip()
     else:
-        # 兜底逻辑：如果 LLM 没有写明 python 标识，尝试提取纯 ``` 块
         fallback_matches = re.findall(r"```\s*([\s\S]*?)```", raw)
         code = fallback_matches[-1].strip() if fallback_matches else raw.strip()
 
-    # 2. 清理所有 import 语句
     try:
-        # 将代码解析为语法树 (AST)
         tree = ast.parse(code)
-
-        # 过滤掉 Import (如 import os) 和 ImportFrom (如 from typing import List) 节点
         tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
-
-        # 重新生成代码 (注意：ast.unparse 需要 Python 3.9+)
         code = ast.unparse(tree)
 
     except Exception:
-        # 兜底逻辑：如果 LLM 生成的代码有语法错误导致 AST 解析失败，降级使用正则进行粗略替换
-        # 匹配单行的 import 和 from ... import ...
         code = re.sub(r"^(?:from\s+[\w.]+\s+)?import\s+.*$", "", code, flags=re.MULTILINE).strip()
-        # 清除多余的空行
         code = re.sub(r'\n\s*\n', '\n', code)
 
     return code
@@ -483,25 +446,20 @@ def kv_codegen_node(state: AgentState) -> dict:
     config = state.get("config", {})
     kv_list = config.get("kv_list", [])
 
-    # 获取预处理节点传入的高密度矩阵信息
     kv_state = state.get("kv_state", {})
     st = kv_state.get("sheet_structure", {})
 
-    # 获取下游传回的错误状态 (用于循环修复)
     errors = state.get("errors", [])
     sandbox_error = state.get("sandbox_error")
 
-    # 提取排版矩阵
     max_row = st.get("max_row", 1000)
     max_col = st.get("max_col", 100)
     merged_cells_info = st.get("merged_cells_info", [])
     sample_cells = st.get("sample_cells", [])
 
-    # 新增 bboxes 字典
     bboxes = st.get("bboxes", {})
     bboxes_info = json.dumps(bboxes, ensure_ascii=False, indent=2) if bboxes else "{}"
 
-    # 动态组装重试指令 (Self-Correction 闭环)
     retry_instruction = ""
     if sandbox_error:
         retry_instruction = (
@@ -520,7 +478,6 @@ def kv_codegen_node(state: AgentState) -> dict:
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         )
 
-    # 格式化用户级 Prompt
     user_prompt = _USER_PROMPT_TEMPLATE.format(
         kv_configs_str=json.dumps(kv_list, ensure_ascii=False, indent=2),
         max_row=max_row,
@@ -537,18 +494,10 @@ def kv_codegen_node(state: AgentState) -> dict:
     ]
 
     try:
-        # response = _get_llm_postman().invoke(messages)
         response = _get_llm_postman_openai().invoke(messages)
-        # response = _get_anthropic_llm().invoke(messages)
-        # response = _get_llm().invoke(messages)
         code = _extract_code(response.content)
         print("———————————————————————— 大模型生成的代码 ————————————————————————————————")
         print(code)
-
-
-        # ———————— DEBUG ————————————————————————————
-    #     code = """\
-    # """
 
     except Exception as e:
         return {"errors": errors + [f"生成 KV 代码请求失败: {str(e)}"]}
@@ -556,9 +505,6 @@ def kv_codegen_node(state: AgentState) -> dict:
     if not code:
         return {"errors": errors + ["大模型未能生成有效的 Python 代码"]}
 
-    # 正常返回
-    # 1. 产生新的代码放入 generated_code (对于 LangGraph 列表类型，通常会自动 append)
-    # 2. 清除上一轮的 sandbox_error，准备进入沙箱验证
     return {
         "kv_state":
             {

@@ -1,6 +1,6 @@
-from Excel_Agent.excel_agent.state import AgentState, CacheState
-from Excel_Agent.excel_agent.cache_manager import l2_set
-from Excel_Agent.excel_agent.nodes.quality import QUALITY_THRESHOLD
+from excel_agent.state import AgentState, CacheState
+from excel_agent.cache_manager import l2_set
+from excel_agent.nodes.quality import QUALITY_THRESHOLD
 
 
 def cache_save_node(state: AgentState) -> dict:

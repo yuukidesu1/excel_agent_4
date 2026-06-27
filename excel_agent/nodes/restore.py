@@ -11,7 +11,7 @@ nodes/restore.py — 结果组装 + 列过滤（纯代码）
 """
 
 from typing import Any, List, Optional, Dict, Union
-from Excel_Agent.excel_agent.state import AgentState
+from excel_agent.state import AgentState
 
 
 def _fmt(v: Any) -> str:
@@ -77,10 +77,8 @@ def restore_node(state: AgentState) -> dict:
     raw_result = state.get("raw_result") or {}
     config = state.get("config", {})
 
-    # 获取配置 (优先新版 subtable_configs)
     target_columns_config = config.get("subtable_configs") or config.get("target_columns")
     subtable_titles = list(target_columns_config.keys())
-    set_subtable_titles = set(subtable_titles)
     if not raw_result:
         return {"result": {}, "final_output": {}}
 
@@ -96,8 +94,6 @@ def restore_node(state: AgentState) -> dict:
         if title not in subtable_titles:
             raise ValueError(f"Title '{title}' not found in user configs")
 
-
-        # ── 格式化所有值 ──
         formatted = [[_fmt(cell) for cell in row] for row in table_data]
         headers_tmp = formatted[0] if formatted else []
         data_rows = formatted[1:] if len(formatted) > 1 else []
@@ -132,50 +128,4 @@ def restore_node(state: AgentState) -> dict:
         ]
 
         final_res[title] = [new_header] + new_data
-
-        # # ── 1. 安全提取当前子表的 target 列表 ──
-        # current_targets_raw = None
-        # if isinstance(target_columns_config, dict):
-        #     current_targets_raw = target_columns_config.get(title)
-        # elif isinstance(target_columns_config, list):
-        #     current_targets_raw = target_columns_config
-        #
-        # # ── 2. 剥离字典结构，拿到真正的 headers 列表 ──
-        # current_targets = []
-        # if isinstance(current_targets_raw, dict):
-        #     # 如果是新版配置字典，根据 layout 提取对应的 headers
-        #     layout = current_targets_raw.get("layout", "仅列")
-        #     if layout in ["仅行", "kv"]:
-        #         current_targets = current_targets_raw.get("headers", [])
-        #     else:
-        #         current_targets = current_targets_raw.get("headers", [])
-        # elif isinstance(current_targets_raw, list):
-        #     # 如果是旧版，本身就是列表
-        #     current_targets = current_targets_raw
-        #
-        # # ── 3. 执行过滤 ──
-        # if current_targets:
-        #     keep_indices: List[int] = []
-        #     keep_labels: List[str] = []
-        #
-        #     for target in current_targets:
-        #         idx = _find_col_index(header, target)
-        #         keep_indices.append(idx)
-        #
-        #         if idx >= 0:
-        #             keep_labels.append(header[idx])
-        #         else:
-        #             _, t_child = _parse_target(target)
-        #             keep_labels.append(f"[未找到]{t_child}")
-        #
-        #     new_header = keep_labels
-        #     new_data = [
-        #         [row[i] if (0 <= i < len(row)) else "" for i in keep_indices]
-        #         for row in data_rows
-        #     ]
-        #     final_res[title] = [new_header] + new_data
-        # else:
-        #     # 如果没有配置 target，直接返回完整表
-        #     final_res[title] = [header] + data_rows
-
     return {"result": final_res, "final_output": final_res}

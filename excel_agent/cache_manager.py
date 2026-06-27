@@ -309,9 +309,8 @@ def l2_search_by_structure(
     with _cache_lock:
         cache = _load_cache(cache_file)
 
-        # 遍历所有 L2 缓存条目
         for key, entry in cache.items():
-            if not key.startswith("l2:") or not sheet_name in key:
+            if not key.startswith("l2:") or sheet_name not in key:
                 continue
 
             if _is_expired(entry):

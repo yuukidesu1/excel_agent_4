@@ -1,5 +1,5 @@
 """
-nodes/pre_structure_analyzer.py — 前置结构分析器 (PSA)
+nodes/pre_structureanalyzer.py — 前置结构分析器 (PSA)
 
 职责：
     1. 基于 parse_node 输出的非空单元格和合并单元格字典，构建 O(1) 查询的 Map。
@@ -14,25 +14,23 @@ nodes/pre_structure_analyzer.py — 前置结构分析器 (PSA)
 import hashlib
 import json
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
-from Excel_Agent.excel_agent.state import AgentState, CacheState, SubtableCacheEntry
+from excel_agent.state import AgentState, CacheState, SubtableCacheEntry
 
-
-# ==================== 1. 基础工具函数 ====================
 
 def _normalize(text: Any) -> str:
     """归一化字符串：转小写、去标点、去空白"""
-    if text is None: return ""
+    if text is None:
+        return ""
     return re.sub(r'[^\w\u4e00-\u9fff]', '', str(text).lower())
+
 
 def _normalize_header(text: str) -> str:
     """针对包含层级符号 || 的表头进行归一化"""
-    if not text: return ""
+    if not text:
+        return ""
     return "||".join([_normalize(p) for p in str(text).split("||")])
-
-
-# ==================== 2. 核心结构分析引擎 ====================
 
 def _build_maps(non_empty_cells: List[Dict], merged_cells_info: List[Dict]) -> tuple[Dict, Dict]:
     """将 parse_node 的输出转化为 O(1) 的查询字典"""
@@ -85,7 +83,8 @@ def _get_header_path(cell_map: Dict, merged_map: Dict, start_r: int, start_c: in
 def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_col: int, e_col: int,
                   target_headers: List[str], direction: str, origin_r: int, origin_c: int) -> List[Dict]:
     """在指定范围内扫描目标表头，返回它们的相对坐标和合并跨度"""
-    if not target_headers: return []
+    if not target_headers:
+        return []
 
     max_depth = max([len(th.split("||")) for th in target_headers])
     norm_targets = [_normalize_header(th) for th in target_headers]
@@ -97,14 +96,14 @@ def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_co
 
             for c in range(s_col, e_col + 1):
                 path = _get_header_path(cell_map, merged_map, r, c, max_depth, "col")
-                if not path: continue
+                if not path:
+                    continue
 
                 for th in norm_targets:
                     if path == th or path.startswith(th + "||"):
                         m_info = merged_map.get((r, c), {"r_span": 1, "c_span": 1, "is_top_left": True, "top_left": (r, c)})
                         top_left = m_info.get("top_left", (r, c))
 
-                        # 使用 top_left 去重，避免同一合并单元格被多次记录
                         if top_left in seen_top_lefts:
                             continue
 
@@ -118,7 +117,6 @@ def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_co
                         seen_top_lefts.add(top_left)
                         break
             if found:
-                # 按列排序，确保表头顺序正确
                 found.sort(key=lambda x: x["rel_col"])
                 return found
 
@@ -129,14 +127,14 @@ def _scan_headers(cell_map: Dict, merged_map: Dict, s_row: int, e_row: int, s_co
 
             for r in range(s_row, e_row + 1):
                 path = _get_header_path(cell_map, merged_map, r, c, max_depth, "row")
-                if not path: continue
+                if not path:
+                    continue
 
                 for th in norm_targets:
                     if path == th or path.startswith(th + "||"):
                         m_info = merged_map.get((r, c), {"r_span": 1, "c_span": 1, "is_top_left": True, "top_left": (r, c)})
                         top_left = m_info.get("top_left", (r, c))
 
-                        # 使用 top_left 去重，避免同一合并单元格被多次记录
                         if top_left in seen_top_lefts:
                             continue
 

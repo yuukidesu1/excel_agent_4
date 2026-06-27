@@ -1,5 +1,5 @@
-from Excel_Agent.excel_agent.state import AgentState, CacheState
-from Excel_Agent.excel_agent.cache_manager import l2_get, apply_code_offset
+from excel_agent.state import AgentState, CacheState
+from excel_agent.cache_manager import l2_get, apply_code_offset
 
 
 def cache_query_node(state: AgentState) -> dict:

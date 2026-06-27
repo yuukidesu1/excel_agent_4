@@ -18,9 +18,8 @@ from typing import Dict, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from Excel_Agent.excel_agent.state import AgentState, CacheState
-from Excel_Agent.excel_agent.nodes.quality import QUALITY_THRESHOLD
-from Excel_Agent.utils.with_dynamic_token import with_dynamic_token
+from excel_agent.state import AgentState, CacheState
+from excel_agent.nodes.quality import QUALITY_THRESHOLD
 
 _SYSTEM_PROMPT = """\
 你是一个资深的 Python 架构师。你的任务是对“一次性”的 Excel 提取脚本进行“参数化重构”。
@@ -45,7 +44,6 @@ _SYSTEM_PROMPT = """\
 }}
 """
 
-# @with_dynamic_token
 def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     from dotenv import load_dotenv
     os.environ["http_proxy"] = ""
@@ -60,8 +58,6 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     base_url = os.getenv("OPENAI_BASE_URL") or None
     model    = os.getenv("LLM_MODEL", "glm-4.7")
     header_name = os.getenv("CUSTOM_HEADER_NAME")
-    # header_value = os.getenv("CUSTOM_HEADER_VALUE")
-
     custom_headers = {}
 
     if header_name and dynamic_token:
@@ -70,7 +66,6 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     if not api_key:
         raise ValueError("未找到 OPENAI_API_KEY，请检查 .env 文件。")
 
-    # 新增：创建一个关闭 SSL 验证的 HTTP 客户端
     http_client = httpx.Client(verify=False, timeout=600)
 
     return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, default_headers=custom_headers, http_client=http_client)
@@ -78,14 +73,20 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
 def _extract_json(raw: str) -> Optional[Dict]:
     m = re.search(r'```json\s*([\s\S]*?)```', raw)
     if m:
-        try: return json.loads(m.group(1).strip())
-        except: pass
+        try:
+            return json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            pass
     m = re.search(r'```\s*([\s\S]*?)```', raw)
     if m:
-        try: return json.loads(m.group(1).strip())
-        except: pass
-    try: return json.loads(raw.strip())
-    except: return None
+        try:
+            return json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+    try:
+        return json.loads(raw.strip())
+    except json.JSONDecodeError:
+        return None
 
 def structure_analyzer_node(state: AgentState) -> dict:
     code = state.get("generated_code", "")
@@ -98,9 +99,7 @@ def structure_analyzer_node(state: AgentState) -> dict:
         cache_state["analyzer_skipped"] = True
         cache_state["analyzer_skip_reason"] = "没有产生新代码或无未命中子表，跳过。"
         return {"cache": cache_state}
-    # ———————————————— DEBUG ——————————————————
-    # if quality_score < QUALITY_THRESHOLD:
-    if quality_score < 2.0:
+    if quality_score < QUALITY_THRESHOLD:
         cache_state["analyzer_skipped"] = True
         cache_state["analyzer_skip_reason"] = f"质量分 {quality_score} 过低，拒绝入库。"
         return {"cache": cache_state}
@@ -112,7 +111,6 @@ def structure_analyzer_node(state: AgentState) -> dict:
             continue
 
         entry_meta = entries[title]
-        # 提取当前子表真实的物理锚点
         s_row = entry_meta.get("start_row", 1)
         s_col = entry_meta.get("start_col", 1)
 

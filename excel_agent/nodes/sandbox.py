@@ -7,18 +7,16 @@ nodes/sandbox.py — 沙盒执行节点（双轨执行架构）
     3. 合并两次执行的结果，返回给后端的 restore / quality 节点校验。
     4. 将执行成功的数据回写进 CacheState 的第四阶段 (extracted_data)，供 SA 节点打包。
 """
-import os
 import re
 import math
 import json
 import builtins
-import sys
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import openpyxl
 
-from Excel_Agent.excel_agent.state import AgentState, CacheState
+from excel_agent.state import AgentState, CacheState
 
 
 _SAFE_BUILTINS = {
@@ -94,24 +92,17 @@ def sandbox_node(state: AgentState) -> dict:
     excel_path = config.get("excel_path") or state.get("excel_path", "")
     sheet_name = config.get("sheet_name", "")
 
-    # —————————————————— KV Agent 抽取开发
-    # 获取 kv_list
     kv_list: List[str] = config.get("kv_list", [])
-    is_kv_model = False
-    if kv_list: is_kv_model = True
+    is_kv_model = bool(kv_list)
     if is_kv_model:
         kv_state = state.get("kv_state")
-        # KV Agent 生成的代码
         kv_generated_code = kv_state.get("generated_code")
-        # 沙箱报错
-        kv_sandbox_error = None
         bboxes = kv_state.get("sheet_structure").get("bboxes")
 
 
     cache_state: CacheState = state.get("cache", {})
     entries = cache_state.get("entries", {})
 
-    # 兼容处理配置字段
     target_configs = config.get("subtable_configs") or config.get("target_columns")
     hints = config.get("hints")
 
@@ -129,13 +120,9 @@ def sandbox_node(state: AgentState) -> dict:
     final_raw_result: Dict[str, List[List[Any]]] = {}
     errors: List[str] = []
 
-    # ==========================================================
-    # ── 双轨执行 Track 1: 运行命中缓存的独立子表代码 ──
-    # ==========================================================
     for title, entry in entries.items():
         if entry.get("cache_hit") and entry.get("code"):
             try:
-                # 为每个缓存代码提供独立的纯净命名空间
                 namespace = {
                     "__builtins__": _SAFE_BUILTINS,
                     "re": re, "math": math, "json": json
@@ -146,23 +133,17 @@ def sandbox_node(state: AgentState) -> dict:
                 if callable(extract_fn):
                     sub_res = _run_with_timeout(lambda: extract_fn(ws, merged_map, entry.get("start_row"), entry.get("start_col")))
 
-                    # 鲁棒性兼容：SA节点拆分出的代码可能返回二维数组，也可能返回字典 {title: 二维数组}
                     if isinstance(sub_res, dict):
                         sub_res = sub_res.get(title) or (list(sub_res.values())[0] if sub_res else [])
 
                     final_raw_result[title] = sub_res
-                    entry["extracted_data"] = sub_res  # 填入 Stage 4，供后续 SA 打包
+                    entry["extracted_data"] = sub_res
                 else:
                     errors.append(f"缓存代码 [{title}] 中未找到 extract 函数。")
             except Exception:
                 errors.append(f"缓存代码 [{title}] 执行失败:\n{traceback.format_exc()}")
 
 
-    # ==========================================================
-    # ── 双轨执行 Track 2: 运行 LLM 新生成的代码 (针对 missed_subtables) ──
-    # ==========================================================
-    # new_code_list = state.get("generated_code", [])
-    # ———————— KV Agent 抽取开发
     new_code_list = kv_generated_code if is_kv_model else state.get("generated_code", [])
 
 

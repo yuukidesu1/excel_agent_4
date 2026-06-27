@@ -3,8 +3,8 @@ import argparse
 import yaml
 from pathlib import Path
 from dotenv import load_dotenv
-from excel_agent_4.excel_agent_4 import run_extraction
-from excel_agent_4.utils.helpers import timer
+from excel_agent import run_extraction
+from utils.helpers import timer
 
 load_dotenv()
 
@@ -58,7 +58,6 @@ def main(config_file: str):
     print("开始执行抽取任务...")
     result = run_extraction(**kwargs)
 
-    # ── 打印结果 ──────────────────────────────────────────────
     success = result.get("success", False)
     print(f"\n{'成功 ✓' if success else '失败 ✗'}  "
           f"质量分：{result.get('quality_score', 0):.2f}  重试：{result.get('retry_count', 0)} 次")
@@ -70,18 +69,16 @@ def main(config_file: str):
         for e in result["errors"]:
             print(f"  ⚠ {e}")
 
-    print(f"\n── LLM 生成的代码 ──────────────────────────────────")
+    print("\n── LLM 生成的代码 ──────────────────────────────────")
     print(result.get("generated_code", "（无）"))
 
     if result.get("data"):
         extracted_data = result["data"]
 
-        # 1. 如果返回的是字典（多个子表）
         if isinstance(extracted_data, dict):
             print("\n── 多子表抽取结果汇总 ──────────────────────────────")
             for table_name, rows in extracted_data.items():
                 if rows and isinstance(rows, list):
-                    # 假设第一行是表头，数据行数为 len(rows) - 1
                     data_rows = len(rows) - 1 if len(rows) > 0 else 0
                     cols = len(rows[0]) if data_rows >= 0 and isinstance(rows[0], list) else 0
                     print(f" 📊 [{table_name}]: {data_rows} 行数据 × {cols} 列")
@@ -89,7 +86,6 @@ def main(config_file: str):
                     print(f" ⚠ [{table_name}]: 提取结果为空或格式不符")
             print("──────────────────────────────────────────────────")
 
-        # 2. 如果返回的是二维列表（单个表格，向下兼容）
         elif isinstance(extracted_data, list):
             rows = extracted_data
             if rows:
@@ -99,7 +95,6 @@ def main(config_file: str):
             else:
                 print("\n── 结果：空列表 ──────────────")
 
-        # 无论哪种格式，都打印完整的 JSON 数据供核对
         print(json.dumps(extracted_data, ensure_ascii=False, indent=2))
     else:
         print("\n❌ 无数据输出")
@@ -111,8 +106,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "-c", "--config",
         type=str,
-        # default="./configs/TSSR_senario_TEST.yaml",
-        # default="./configs/TSSR_senario_SAM1.yaml"
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )
     args = parser.parse_args()

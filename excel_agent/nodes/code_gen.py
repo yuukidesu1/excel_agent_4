@@ -1,7 +1,6 @@
 import json
 import re
 import os
-import time
 
 import httpx
 from pathlib import Path
@@ -9,9 +8,7 @@ from pathlib import Path
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from Excel_Agent.excel_agent.state import AgentState
-
-from Excel_Agent.utils.with_dynamic_token import with_dynamic_token
+from excel_agent.state import AgentState
 
 _SYSTEM_PROMPT = """\
 你是顶尖的 Excel 数据抽取专家。请根据传入的结构视图和前置分析器 (PSA) 提示，编写 Python 代码抽取指定子表的数据。
@@ -117,7 +114,6 @@ def extract(ws, merged_map: dict) -> dict:
 ```
 """
 
-# @with_dynamic_token
 def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     from dotenv import load_dotenv
     os.environ["http_proxy"] = ""
@@ -132,8 +128,6 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     base_url = os.getenv("OPENAI_BASE_URL") or None
     model    = os.getenv("LLM_MODEL", "glm-4.7")
     header_name = os.getenv("CUSTOM_HEADER_NAME")
-    # header_value = os.getenv("CUSTOM_HEADER_VALUE")
-
     custom_headers = {}
 
     if header_name and dynamic_token:
@@ -142,12 +136,9 @@ def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     if not api_key:
         raise ValueError("未找到 OPENAI_API_KEY，请检查 .env 文件。")
 
-    # 新增：创建一个关闭 SSL 验证的 HTTP 客户端
     http_client = httpx.Client(verify=False, timeout=600)
 
-    # a = ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, default_headers=custom_headers, http_client=http_client)
     return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, default_headers=custom_headers, http_client=http_client)
-    # return a
 
 
 def _extract_code(raw: str) -> str:
@@ -166,17 +157,14 @@ def code_gen_node(state: AgentState) -> dict:
 
     config = state.get("config", {})
 
-    # 1. 优先获取 missed_subtables
     cache_state = state.get("cache", {})
     subtable_titles = [ms[0] for ms in cache_state.get("missed_subtables")]
     if subtable_titles is None:
         subtable_titles = config.get("subtable_titles", [])
 
-    # 2. 兼容新旧配置
     subtable_configs = config.get("subtable_configs") or config.get("target_columns")
     hints = config.get("hints")
 
-    # 3. ★ 核心提取：提取 PSA 识别出的物理锚点与布局类型
     psa_hints = {}
     for title in subtable_titles:
         entry = cache_state.get("entries", {}).get(title)
@@ -185,10 +173,9 @@ def code_gen_node(state: AgentState) -> dict:
                 "layout_type": entry.get("layout_type", "vertical"),
                 "start_row": entry.get("start_row"),
                 "start_col": entry.get("start_col"),
-                "header_map": entry.get("header_map", {}),  # ← 新增：PSA 识别的表头坐标信息
+                "header_map": entry.get("header_map", {}),
             }
 
-    # 4. 极限压缩 Token 优化逻辑 _START_
     target_rows = set()
     matched_subtables = []
 
@@ -214,7 +201,6 @@ def code_gen_node(state: AgentState) -> dict:
         if m["min_row"] in target_rows or m["max_row"] in target_rows
     ][:100]
 
-    # 5. 组装最终上下文
     ctx: dict = {
         "subtable_titles": subtable_titles,
         "subtable_configs": subtable_configs,
@@ -228,12 +214,9 @@ def code_gen_node(state: AgentState) -> dict:
             "sample_cells": compressed_cells
         },
     }
-    # 极限压缩 Token 优化逻辑 _END_
-
     if hints:
         ctx["hints"] = hints
 
-    # 重试时附上错误，让 LLM 针对性修正
     if sandbox_error:
         ctx["last_code_error"] = sandbox_error
         ctx["retry_instruction"] = (

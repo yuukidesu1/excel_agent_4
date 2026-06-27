@@ -12,8 +12,8 @@ nodes/parse.py — Excel 结构解析节点（纯代码）
 """
 
 import openpyxl
-from typing import List, Dict, Any
-from Excel_Agent.excel_agent.state import AgentState
+from typing import List, Dict
+from excel_agent.state import AgentState
 
 
 def _find_sheet(wb, requested: str) -> str:
@@ -35,10 +35,6 @@ def _row_is_empty(ws, row_idx: int, max_col: int) -> bool:
 
 
 def parse_node(state: AgentState) -> dict:
-    # try:
-    #     wb         = openpyxl.load_workbook(state["config"]["excel_path"])
-    # except Exception as e:
-    #     return {"error" : f"无法读取 Excel 文件: {state['config']['excel_path']}"}
     wb = openpyxl.load_workbook(state["config"]["excel_path"])
     sheet_name = _find_sheet(wb, state["config"]["sheet_name"])
     if sheet_name not in wb.sheetnames:
@@ -47,16 +43,12 @@ def parse_node(state: AgentState) -> dict:
     max_row    = ws.max_row
     max_col    = ws.max_column
 
-    # ── 1. 遍历所有非空单元格 ────────────────────────────────
     non_empty_cells:   List[Dict] = []
     potential_headers: List[Dict] = []
     merged_coords = set()
 
-    # 获取用户配置
     usr_config = state.get("config", "")
-    # 获取用户配置的表头
     usr_titles = usr_config.get("subtable_titles")
-    # 先收集合并单元格坐标
     for m in ws.merged_cells.ranges:
         for r in range(m.min_row, m.max_row + 1):
             for c in range(m.min_col, m.max_col + 1):
@@ -72,16 +64,14 @@ def parse_node(state: AgentState) -> dict:
                 "coord":  cell.coordinate,
                 "row":    cell.row,
                 "col":    cell.column,
-                "value":  str(cell.value).replace('\n', ' ').replace('\r', '').strip()[:300],    # 清洗换行符
+                "value":  str(cell.value).replace('\n', ' ').replace('\r', '').strip()[:300],
                 "bold":   is_bold,
                 "merged": is_merged,
             }
             non_empty_cells.append(info)
-            # 粗体 or 合并单元格 → 候选表头
             if is_bold or is_merged:
                 potential_headers.append(info)
 
-    # ── 2. 合并单元格详情 ────────────────────────────────────
     merged_cells_info: List[Dict] = []
     for m in ws.merged_cells.ranges:
         top_val = ws.cell(row=m.min_row, column=m.min_col).value
@@ -96,8 +86,6 @@ def parse_node(state: AgentState) -> dict:
             "col_span": m.max_col - m.min_col + 1,
         })
 
-    # ── 3. 基于空行切分候选子表块 ────────────────────────────
-    # 与灵犀"根据空间分布初步拆分"逻辑一致
     potential_subtables: List[Dict] = []
     in_block    = False
     block_start = 1
@@ -124,8 +112,7 @@ def parse_node(state: AgentState) -> dict:
             })
             in_block = False
 
-    # DEBUG
-    res = {
+    return {
         "sheet_structure": {
             "sheet_name": sheet_name,
             "max_row": max_row,
@@ -136,15 +123,3 @@ def parse_node(state: AgentState) -> dict:
             "potential_subtables": potential_subtables,
         }
     }
-    return res
-    # return {
-    #     "sheet_structure": {
-    #         "sheet_name":          sheet_name,
-    #         "max_row":             max_row,
-    #         "max_col":             max_col,
-    #         "non_empty_cells":     non_empty_cells,
-    #         "potential_headers":   potential_headers,
-    #         "merged_cells_info":   merged_cells_info,
-    #         "potential_subtables": potential_subtables,
-    #     }
-    # }
