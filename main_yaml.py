@@ -1,11 +1,10 @@
-import sys
 import json
 import argparse
 import yaml
 from pathlib import Path
 from dotenv import load_dotenv
-from excel_agent import run_extraction
-from utils.helpers import timer
+from excel_agent_4.excel_agent_4 import run_extraction
+from excel_agent_4.utils.helpers import timer
 
 load_dotenv()
 
@@ -20,27 +19,41 @@ def main(config_file: str):
 
     excel_path = config.get("excel_path")
     sheet_name = config.get("sheet_name")
-    subtable_titles = config.get("subtable_titles")
-    target_columns = config.get("target_columns", None)
+    kv_list = config.get("kv_list")
+    is_kv_model = bool(kv_list)
 
-    if not all([excel_path, sheet_name, subtable_titles]):
-        raise ValueError("配置文件中必须包含 excel_path, sheet_name 和 subtable_titles")
-
-    print("="*100)
-    print("loading config...")
-    print(config_path.name)
-    print("="*100)
-    print("loading excel...")
-    print(f"📊 目标 Excel: {excel_path} | Sheet: {sheet_name} | 子表: {subtable_titles}")
-    print("="*100)
+    if is_kv_model:
+        subtable_titles = config.get("subtable_titles")
+        subtable_configs = config.get("subtable_configs") or config.get("target_columns")
+        print("="*100)
+        print("loading config...")
+        print(config_path.name)
+        print("="*100)
+        print("loading excel (KV mode)...")
+        print(f"📊 目标 Excel: {excel_path} | Sheet: {sheet_name} | KV List: {kv_list}")
+        print("="*100)
+    else:
+        subtable_titles = config.get("subtable_titles")
+        subtable_configs = config.get("subtable_configs") or config.get("target_columns")
+        if not all([excel_path, sheet_name, subtable_titles]):
+            raise ValueError("配置文件中必须包含 excel_path, sheet_name 和 subtable_titles")
+        print("="*100)
+        print("loading config...")
+        print(config_path.name)
+        print("="*100)
+        print("loading excel...")
+        print(f"📊 目标 Excel: {excel_path} | Sheet: {sheet_name} | 子表: {subtable_titles}")
+        print("="*100)
 
     kwargs = {
         "excel_path": excel_path,
         "sheet_name": sheet_name,
         "subtable_titles": subtable_titles,
     }
-    if target_columns is not None:
-        kwargs["target_columns"] = target_columns
+    if subtable_configs is not None:
+        kwargs["subtable_configs"] = subtable_configs
+    if kv_list is not None:
+        kwargs["kv_list"] = kv_list
 
     print("开始执行抽取任务...")
     result = run_extraction(**kwargs)
@@ -91,20 +104,15 @@ def main(config_file: str):
     else:
         print("\n❌ 无数据输出")
 
-    # if result.get("data"):
-    #     rows = result["data"]
-    #     print(f"\n── 结果：{len(rows) - 1} 行数据 × {len(rows[0])} 列 ──────────────")
-    #     print(json.dumps(rows, ensure_ascii=False, indent=2))
-    # else:
-    #     print("\n❌ 无数据输出")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Excel 抽取代理")
     parser.add_argument(
         "-c", "--config",
         type=str,
-        default="./configs/TSSR_senario_TEST.yaml",
-        # default="./configs/generalization_test/CONFIGURATION.yaml",
+        # default="./configs/TSSR_senario_TEST.yaml",
+        # default="./configs/TSSR_senario_SAM1.yaml"
         help="YAML 配置文件路径 (例如./configs/task_3g.yaml)"
     )
     args = parser.parse_args()

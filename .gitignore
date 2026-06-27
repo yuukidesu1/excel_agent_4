@@ -1,5 +1,8 @@
 /.env
 /ws_test_file_use.xlsx
-/WPSlingxi/
+/dev/docs/WPSlingxi/
 /utils/
 /configs/*.yaml
+*.md
+*.xlsx
+*.yaml

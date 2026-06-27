@@ -6,6 +6,7 @@ state.py — 全局状态定义
     可选：target_columns  → 只保留指定列（None = 保留全部）
           hints           → 额外定位提示
 """
+import operator
 from typing import TypedDict, Optional, List, Dict, Any, Union, Annotated, Tuple
 
 
@@ -22,9 +23,6 @@ class ConfigState(TypedDict):
     sheet_name: str
     subtable_titles: List[str] # str -> List[str] 以适配多子表抽取
     hints: Optional[str]
-    extract_type: Optional[str]
-    kv_list: Optional[List[str]]
-    target_columns: Optional[Dict[str, List[Dict[str, Any]]]]
     # target_columns: Optional[Dict[str, List[Dict[str, Any]]]]
     subtable_configs: Optional[Dict[str, Union[SubtableConfig, List[Any]]]]
 
@@ -134,7 +132,7 @@ class AgentState(TypedDict):
     sheet_structure: Optional[Dict[str, Any]]
 
     # ── code_gen_node 输出 ───────────────────────────────────────────────
-    generated_code: Optional[Any]
+    generated_code: Annotated[List[str], operator.add]
 
     # ── extract_node 输出──
     raw_data: Optional[List[List[Any]]]
@@ -145,7 +143,7 @@ class AgentState(TypedDict):
 
     # ── restore_node 输出 ───────────────────────────────────────────────
     result:     Optional[Dict[str, List[List[str]]]]              # Optional[List[List[str]]] -> Optional[Dict[str, List[List[str]]]]
-    final_output: Optional[Any]
+    final_result: Optional[Dict[str, List[List[str]]]]            # Optional[List[List[str]]] -> Optional[Dict[str, List[List[str]]]]
 
     # ── 新增：KV 抽取专用状态域 ──────────────────────────────
     # 将 KV 的所有上下文封存在这里，不污染常规表的 sheet_structure 和 result
@@ -155,7 +153,7 @@ class AgentState(TypedDict):
     quality_score: float
     retry_count:   int
     errors:        List[str]
-    sandbox_error: Optional[str] # 代码执行异常信息，重试时传给 LLM
+    sandbox_error: Annotated[Optional[str], lambda a, b: b if b is not None else a] # 代码执行异常信息，重试时传给 LLM
 
     # ── 缓存系统 ───────────────────────────────────────────────
     cache: CacheState

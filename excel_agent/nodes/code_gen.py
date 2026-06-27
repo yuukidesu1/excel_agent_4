@@ -1,106 +1,128 @@
-"""
-nodes/code_gen.py — LLM 节点：看 parse 数据，写 openpyxl 抽取代码
-
-LLM 的任务：
-    1. 理解 sheet_structure（子表位置、合并单元格、表头结构）
-    2. 根据 subtable_titles 定位目标子表
-    3. 编写完整的 Python 抽取函数，使用 openpyxl 直接读取数据
-    4. 函数必须返回 List[List[str]]（标准二维数组，第0行为列名）
-
-重试时携带上次的错误信息（代码执行异常 or 质量问题），让 LLM 修正。
-
-代码规范（写入 System Prompt）：
-    - 必须定义 extract(ws, merged_map) 函数
-    - merged_map 是预建的合并填充图 {(row,col): value}，直接用
-    - 返回值必须是 List[List[str]]，第0行为列名
-    - 不能 import openpyxl（ws 已由 sandbox 传入）
-    - 不能读文件、不能访问网络、不能使用 os/sys/subprocess
-"""
-
 import json
 import re
 import os
+import time
+
+import httpx
 from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from excel_agent.state import AgentState
+from Excel_Agent.excel_agent.state import AgentState
 
+from Excel_Agent.utils.with_dynamic_token import with_dynamic_token
 
 _SYSTEM_PROMPT = """\
-你是 Excel 数据抽取专家。我会给你一份 Excel Sheet 的完整结构描述，
-你需要编写一段 Python 代码，使用已加载好的 openpyxl Worksheet 对象抽取指定子表的数据。
+你是顶尖的 Excel 数据抽取专家。请根据传入的结构视图和前置分析器 (PSA) 提示，编写 Python 代码抽取指定子表的数据。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-你收到的信息：
-  - subtable_titles      : 目标子表的标题关键词列表（List[str]）
-  - target_columns      : 需要抽取的列配置。格式为字典，键为子表名，值为该表的列配置（None = 抽取全部列）
-  - sheet_structure     : Sheet 的完整结构
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-你必须编写一个名为 `extract` 的函数，签名如下：
-
-```python
-def extract(ws, merged_map: dict) -> list:
-    ...
-    return result  # Dict[str, List[List[str]]]
-```
-
-返回值规范：
-  - 必须返回一个字典（dict）。
-  - 字典的键为 subtable_titles 中的原名，值为该子表对应的 List[List[str]]。
-  - 第 0 行为列名列表，后续为数据行。
+【输入上下文信息】
+  - subtable_titles   : 当前需要抽取的子表名称列表。
+  - subtable_configs  : 抽取配置（包含需要提取的 headers 列表）。
+  - psa_hints         : 提供子表的 layout_type(布局)、start_row(起步行)、start_col(起步列) 等物理锚点。
+  - sheet_structure   : 包含非空单元格、合并单元格坐标与值的压缩视图（供你观察结构）。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-重要规则：
-  1. 只能使用标准库（re, json, math 等），不能 import openpyxl
-  2. 【合并单元格处理】：必须通过 merged_map 读取
-  3. 【空值处理策略】：必须保持原始空单元格结构，绝对禁止进行向前的逻辑填充（forward-fill）
-  4. 【禁止搜索指令】：绝对禁止写 for 循环去搜索标题。你必须在代码中直接使用硬编码的具体数字！
-  5. 【表头处理关键】：如果子表存在双行表头（例如第8行是父类，第9行是子类），必须同时读取两行，并用 "||" 拼接！如果是单行表头，只读一行。
-  6. 必须为传入的每一个子表独立提取一份数据。如果表不存在，返回空列表 []。
-  7. 只返回代码，不要任何解释。代码包在 ```python ... ``` 中
+【输出与红线规则】
+你必须编写一个名为 `extract(ws, merged_map: dict) -> dict` 的函数。
+返回值必须是 Dict[str, List[List[str]]]，键为子表名，值为标准的二维数组。
+
+核心红线规则（违反将导致系统崩溃）：
+1. 提取策略降维：无论是 vertical(纵表)、horizontal(横表) 还是 cross(交叉表)，你的任务仅仅是将它们作为“普通的二维网格”提取出来。第 0 行为表头，后续为数据。不要执行展平 (Melt) 等操作。
+2. 坐标数值化（极度重要）：你【绝对不能】在生成的代码中调用外部上下文未定义的变量（会报 NameError）。你必须直接观察传入的 `sheet_structure`，推断出具体的起始行号、列号，并将它们【写死为纯数字】（例如 `data_cols = [2, 3, 5]`）。
+3. 防越界终止探针（防止连续表格“一读到底”）：绝对不能写死结束行，必须使用 `while` 循环向下或向右扫描。为了防止多个子表紧密相连导致越界抓取，【必须使用双重防越界探针】：
+   - 探针 A（判空）：当探针列/行的值为空时，必须 `break`。
+   - 探针 B（语义截断）：当探针列/行的值等于【其他子表的标题】或【特定边界词（如 Total, Note, 备注）】时，必须立即 `break`。
+4. 单元格读取安全：必须通过 `merged_map.get((r, c), ws.cell(row=r, column=c).value)` 读取单元格。
+5. 多级表头处理：如果目标配置中包含 `||` 符号的多级表头（如 `"RF MODULE||TYPE"`），你必须使用内置的 `_h(r, c, depth)` 函数，从 Excel 中读取垂直堆叠的表头单元格并拼接。
+6. 横表转置规则（针对 horizontal 布局）：当提取 horizontal 横向布局的表格时，严禁按行将数据打包。你必须以列为单位进行 while c <= ws.max_column 扫描，将每一列对应的多个属性值打包成一个 List 插入表中，从而在逻辑上完成行列转置。例如表头是 [PropertyA, PropertyB] ，则每一行的数据必须是 [ValueA, ValueB] ，绝不能是 [ValueA, ValueB, ...] 。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-代码模板（参考）：
+【代码骨架模板 (请严格遵循此范式)】
 
 ```python
 def extract(ws, merged_map: dict) -> dict:
     def cell_val(r, c):
         v = merged_map.get((r, c), ws.cell(row=r, column=c).value)
-        if v is None: return ""
-        if isinstance(v, float) and v == int(v): return str(int(v))
-        return str(v).replace('\\n', ' ').replace('\\r', '').strip()
+        if v is None:
+            return ""
+        if isinstance(v, float) and v == int(v):
+            v = str(int(v))
+        return " ".join(str(v).splitlines()).strip()
+
+    def _h(r, c, depth=2):
+        '''构建多级表头键 (如 '父||子')。
+        从第 r 行开始向下读取 depth 行，拼接非空单元格值。
+        '''
+        parts = []
+        for i in range(depth):
+            v = merged_map.get((r + i, c), ws.cell(row=r + i, column=c).value)
+            if v:
+                parts.append(str(v).replace('\\n', ' ').replace('\\r', '').strip())
+        return "||".join(parts) if parts else ""
 
     result = {}
-    
-    # ==== 提取表1 (硬编码坐标) ====
-    start_col, end_col = 2, 15
-    
-    # 【情形A】如果是双行表头（例如第8行是父类，第9行是子类）：
-    header_row1 = [cell_val(8, c) for c in range(start_col, end_col + 1)]
-    header_row2 = [cell_val(9, c) for c in range(start_col, end_col + 1)]
-    headers_1 = [f"{p}||{c}" if p and str(p) != str(c) else c for p, c in zip(header_row1, header_row2)]
-    
-    # 【情形B】如果是单行表头：
-    # headers_1 = [cell_val(8, c) for c in range(start_col, end_col + 1)]
 
-    rows_1 = [headers_1]
-    
-    # 读取数据行
-    for r in range(10, 20):
-        rows_1.append([cell_val(r, c) for c in range(start_col, end_col + 1)])
-        
-    result["Group 1"] = rows_1
-    
+    # ==== 示例 1: 纵表 ("vertical"布局) 的提取范式 ====
+    header_row = 5
+    headers_1 = [_h(header_row, c, depth=2) for c in [2, 3, 4, 5, 9, 10]]
+
+    data_cols = [2, 3, 4, 5, 9, 10]
+    data_start_row = 6
+
+    # 重点：定义防越界截断词（从上下文中观察到的下一个表格标题、或其他终止特征）
+    stop_words_1 = ["Table 2 Name", "Total", "Notes", "Remark", "Summary"]
+
+    table_1 = [headers_1]
+    r = data_start_row
+    while r <= ws.max_row:
+        probe_val = cell_val(r, 2) # 通常选择主键列（如第2列）作为探针
+
+        # 双重探针：为空，或触碰到截断词，立即终止当前表格的提取
+        if not probe_val or any(sw.lower() in probe_val.lower() for sw in stop_words_1):
+            break
+
+        table_1.append([cell_val(r, c) for c in data_cols])
+        r += 1
+
+    result["Table 1 Name"] = table_1
+
+
+    # ==== 示例 2: 横表 ("horizontal"布局) 的提取范式 ====
+    header_col = 1
+    data_rows = [10, 11]
+    data_start_col = 2
+
+    headers_2 = [cell_val(r, header_col) for r in data_rows]
+    table_2 = [headers_2]
+
+    # 横表同样需要防越界截断词（向右扫描时可能遇到的其他模块标题或无关文字）
+    stop_words_2 = ["Next Section", "End"]
+
+    c = data_start_col
+    while c <= ws.max_column:
+        probe_val = cell_val(data_rows[0], c) # 通常选择第一行作为探针
+
+        # ★ 双重探针限制
+        if not probe_val or any(sw.lower() in probe_val.lower() for sw in stop_words_2):
+            break
+
+        table_2.append([cell_val(r, c) for r in data_rows])
+        c += 1
+
+    result["Table 2 Name"] = table_2
+
     return result
 ```
 """
 
-
-def _get_llm() -> ChatOpenAI:
+# @with_dynamic_token
+def _get_llm(dynamic_token: str = None) -> ChatOpenAI:
     from dotenv import load_dotenv
+    os.environ["http_proxy"] = ""
+    os.environ["https_proxy"] = ""
+    os.environ["all_proxy"] = ""
     for parent in Path(__file__).resolve().parents:
         env_file = parent / ".env"
         if env_file.exists():
@@ -108,34 +130,65 @@ def _get_llm() -> ChatOpenAI:
             break
     api_key  = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL") or None
-    model    = os.getenv("LLM_MODEL", "glm-4")
+    model    = os.getenv("LLM_MODEL", "glm-4.7")
+    header_name = os.getenv("CUSTOM_HEADER_NAME")
+    # header_value = os.getenv("CUSTOM_HEADER_VALUE")
+
+    custom_headers = {}
+
+    if header_name and dynamic_token:
+        custom_headers[header_name] = dynamic_token
+
     if not api_key:
         raise ValueError("未找到 OPENAI_API_KEY，请检查 .env 文件。")
-    return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url)
+
+    # 新增：创建一个关闭 SSL 验证的 HTTP 客户端
+    http_client = httpx.Client(verify=False, timeout=600)
+
+    # a = ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, default_headers=custom_headers, http_client=http_client)
+    return ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, default_headers=custom_headers, http_client=http_client)
+    # return a
 
 
 def _extract_code(raw: str) -> str:
-    """从 LLM 输出中提取 ```python ... ``` 之间的代码"""
+    """从 LLM 输出中提取 python ...  之间的代码"""
     m = re.search(r"```python\s*([\s\S]*?)```", raw)
     if m:
         return m.group(1).strip()
-    # 没有代码块标记，直接返回（容错）
     return raw.strip()
 
+
 def code_gen_node(state: AgentState) -> dict:
-    """高密度压缩测试"""
+    """高密度压缩并生成 LLM Prompt 节点"""
     st = state["sheet_structure"]
     errors = state.get("errors", [])
     sandbox_error = state.get("sandbox_error")
 
     config = state.get("config", {})
-    subtable_titles = config.get("subtable_titles") or state.get("subtable_titles")
 
-    target_columns = config.get("target_columns") or state.get("target_columns")
-    hints = config.get("hints") or state.get("hints")
+    # 1. 优先获取 missed_subtables
+    cache_state = state.get("cache", {})
+    subtable_titles = [ms[0] for ms in cache_state.get("missed_subtables")]
+    if subtable_titles is None:
+        subtable_titles = config.get("subtable_titles", [])
 
-    # 极限压缩 Token 优化逻辑 _START_
-    # 1. 圈定重点观察区域（只关注命中标题的子表附近的行）
+    # 2. 兼容新旧配置
+    subtable_configs = config.get("subtable_configs") or config.get("target_columns")
+    hints = config.get("hints")
+
+    # 3. ★ 核心提取：提取 PSA 识别出的物理锚点与布局类型
+    psa_hints = {}
+    for title in subtable_titles:
+        entry = cache_state.get("entries", {}).get(title)
+        if entry:
+            psa_hints[title] = {
+                "layout_type": entry.get("layout_type", "vertical"),
+                "start_row": entry.get("start_row"),
+                "start_col": entry.get("start_col"),
+                "header_map": entry.get("header_map", {}),  # ← 新增：PSA 识别的表头坐标信息
+            }
+
+    # 4. 极限压缩 Token 优化逻辑 _START_
     target_rows = set()
     matched_subtables = []
 
@@ -147,35 +200,32 @@ def code_gen_node(state: AgentState) -> dict:
         )
         if is_match:
             matched_subtables.append(sub)
-            # 扩大视野，包含子表上方 2 行（捕获大标题）和整个表格区域
             target_rows.update(range(max(1, sub["start_row"] - 2), sub["end_row"] + 2))
 
-    # 2. 抛弃冗余的 JSON 键名 (row, col, value...)，改用高密度字符串格式
-    # 格式如："R10C2:Sector 1"
     compressed_cells = [
         f"R{c['row']}C{c['col']}:{c['value']}"
         for c in st.get("non_empty_cells", [])
         if c["row"] in target_rows
-    ][:200]  # 限定最大数量防止意外超载
+    ][:250]
 
-    # 合并单元格信息也压缩为简短字符串："R1C1~R1C4:Title"
     compressed_merges = [
         f"R{m['min_row']}C{m['min_col']}~R{m['max_row']}C{m['max_col']}:{m['value']}"
         for m in st.get("merged_cells_info", [])
         if m["min_row"] in target_rows or m["max_row"] in target_rows
-    ][:80]
+    ][:100]
 
-    # 3. 组装极简上下文
+    # 5. 组装最终上下文
     ctx: dict = {
         "subtable_titles": subtable_titles,
-        "target_columns": target_columns,
+        "subtable_configs": subtable_configs,
+        "psa_hints": psa_hints,
         "sheet_structure": {
             "sheet_name": st["sheet_name"],
             "max_row": st["max_row"],
             "max_col": st["max_col"],
-            "matched_subtables": matched_subtables,  # 只传命中的块
-            "merged_cells_info": compressed_merges,  # 传入压缩后的字符串列表
-            "sample_cells": compressed_cells  # 传入压缩后的字符串列表
+            "matched_subtables": matched_subtables,
+            "merged_cells_info": compressed_merges,
+            "sample_cells": compressed_cells
         },
     }
     # 极限压缩 Token 优化逻辑 _END_
@@ -187,16 +237,14 @@ def code_gen_node(state: AgentState) -> dict:
     if sandbox_error:
         ctx["last_code_error"] = sandbox_error
         ctx["retry_instruction"] = (
-            "上次生成的代码执行时出错，请仔细阅读错误信息修正代码。"
-            "特别注意：子表标题匹配必须使用模糊匹配（忽略大小写和空格），"
-            "不能用 == 精确匹配；合并单元格必须用 merged_map 处理；"
-            "行列边界必须从 sheet_structure 动态计算，不能硬编码数字。"
+            "上次生成的代码执行时出错，请仔细阅读上方错误信息修正代码！\n"
         )
     elif errors:
         ctx["last_quality_errors"] = errors[-3:]
         ctx["retry_instruction"] = (
-            "上次代码执行成功但质量不达标，请根据质量问题修正。"
-            "常见问题：数据行为空、列数不对、空值率过高。"
+            ""
+            "-上次代码执行成功但质量不达标，请根据质量报错修正代码。\n"
+            "常见错误：如果是 horizontal 横表，返回的数组中可能行/列发生了颠倒，请参考代码模板中按列遍历的逻辑。"
         )
 
     messages = [
@@ -207,73 +255,5 @@ def code_gen_node(state: AgentState) -> dict:
     response = _get_llm().invoke(messages)
     code     = _extract_code(response.content)
 
-    return {"generated_code": code, "sandbox_error": None}  # 清空上次的沙盒错误
 
-def code_gen_node_(state: AgentState) -> dict:
-    """
-    输入：sheet_structure + subtable_titles + target_columns
-    输出：generated_code（完整的 extract 函数字符串）
-    """
-    st            = state["sheet_structure"]
-    errors        = state.get("errors", [])
-    sandbox_error = state.get("sandbox_error")
-
-    # 兼容 config 嵌套结构和平铺结构两种 state 设计
-    config         = state.get("config", {})
-    subtable_titles = config.get("subtable_titles") or state.get("subtable_titles", [])
-    target_columns = config.get("target_columns") or state.get("target_columns")
-    hints          = config.get("hints")          or state.get("hints")
-
-    # ── 构造给 LLM 的上下文 ──────────────────────────────────
-    ctx: dict = {
-        "subtable_titles": subtable_titles,
-        "target_columns": target_columns,
-        "sheet_structure": {
-            "sheet_name":        st["sheet_name"],
-            "max_row":           st["max_row"],
-            "max_col":           st["max_col"],
-            "subtables":         st["potential_subtables"],
-            "potential_headers": st["potential_headers"][:150],
-            "merged_cells_info": st["merged_cells_info"][:120],
-            "sample_cells":      [
-                c for c in st["non_empty_cells"]
-                if any(
-                    sub["start_row"] - 2 <= c["row"] <= sub["end_row"] + 2
-                    for sub in st["potential_subtables"]
-                    # 遍历判断是否属于目标标题之一
-                    if any(t.lower() in sub.get("title", "").lower() or
-                           any(t.lower() in tc.lower() for tc in sub.get("title_candidates", []))
-                           for t in subtable_titles)
-                )
-            ][:200],
-        },
-    }
-
-    if hints:
-        ctx["hints"] = hints
-
-    # 重试时附上错误，让 LLM 针对性修正
-    if sandbox_error:
-        ctx["last_code_error"] = sandbox_error
-        ctx["retry_instruction"] = (
-            "上次生成的代码执行时出错，请仔细阅读错误信息修正代码。"
-            "特别注意：子表标题匹配必须使用模糊匹配（忽略大小写和空格），"
-            "不能用 == 精确匹配；合并单元格必须用 merged_map 处理；"
-            "行列边界必须从 sheet_structure 动态计算，不能硬编码数字。"
-        )
-    elif errors:
-        ctx["last_quality_errors"] = errors[-3:]
-        ctx["retry_instruction"] = (
-            "上次代码执行成功但质量不达标，请根据质量问题修正。"
-            "常见问题：数据行为空、列数不对、空值率过高。"
-        )
-
-    messages = [
-        SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=json.dumps(ctx, ensure_ascii=False, indent=2)),
-    ]
-
-    response = _get_llm().invoke(messages)
-    code     = _extract_code(response.content)
-
-    return {"generated_code": code, "sandbox_error": None}  # 清空上次的沙盒错误
+    return {"generated_code": [code], "sandbox_error": None}

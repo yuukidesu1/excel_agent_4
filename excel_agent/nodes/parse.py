@@ -13,7 +13,7 @@ nodes/parse.py — Excel 结构解析节点（纯代码）
 
 import openpyxl
 from typing import List, Dict, Any
-from excel_agent.state import AgentState
+from Excel_Agent.excel_agent.state import AgentState
 
 
 def _find_sheet(wb, requested: str) -> str:
@@ -52,6 +52,10 @@ def parse_node(state: AgentState) -> dict:
     potential_headers: List[Dict] = []
     merged_coords = set()
 
+    # 获取用户配置
+    usr_config = state.get("config", "")
+    # 获取用户配置的表头
+    usr_titles = usr_config.get("subtable_titles")
     # 先收集合并单元格坐标
     for m in ws.merged_cells.ranges:
         for r in range(m.min_row, m.max_row + 1):
@@ -109,6 +113,8 @@ def parse_node(state: AgentState) -> dict:
                 c["value"] for c in non_empty_cells
                 if block_start <= c["row"] <= block_start + 2
             ]
+            for usr_title in (usr_titles or []):
+                title_candidates.append(usr_title)
             potential_subtables.append({
                 "start_row":        block_start,
                 "end_row":          r - 1,

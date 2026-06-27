@@ -11,7 +11,7 @@ nodes/quality.py — 质量打分 + 条件路由
 重试上限：MAX_RETRY = 3（超过后强制输出现有结果）
 """
 
-from excel_agent.state import AgentState
+from Excel_Agent.excel_agent.state import AgentState
 
 MAX_RETRY         = 3
 QUALITY_THRESHOLD = 0.75
@@ -26,6 +26,12 @@ nodes/quality.py — 质量打分 + 条件路由
 
 
 def quality_node(state: AgentState) -> dict:
+    """kv mode"""
+    is_kv_mode = bool(state.get("config").get("kv_list"))
+    if is_kv_mode:
+        return {
+            "quality_score" : 1.0
+        }
     result = state.get("result", {})
     errors = list(state.get("errors", []))
     score = 1.0
@@ -37,7 +43,7 @@ def quality_node(state: AgentState) -> dict:
     ) # 修复读取不到config的问题
     if isinstance(target_titles, str):
         target_titles = [target_titles]
-    target_columns = config.get("target_columns") or state.get("target_columns")
+    target_columns = config.get("subtable_configs") or config.get("target_columns") or state.get("subtable_configs") or state.get("target_columns")
 
     if not result:
         score -= 0.50
